@@ -1,0 +1,9 @@
+# Godot 4 generated files — never commit these
+.godot/
+
+# Export credentials (contain signing keys)
+export_credentials.cfg
+
+# OS junk
+.DS_Store
+Thumbs.db
