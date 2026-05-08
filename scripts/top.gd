@@ -12,7 +12,6 @@ class BladeData:
 	var display_name:    String
 	var desc:            String
 	var disc_sides:      int     # polygon sides on the fusion wheel
-	var move_force:      float   # lateral push force
 	var angular_damp:    float   # spin decay rate
 	var blade_thickness: float   # height of outer ring
 	var blade_radius:    float   # radius of outer ring
@@ -42,6 +41,7 @@ class TipData:
 	var tip_radius:   float   # contact sphere radius
 	var tip_y:        float   # vertical position of tip sphere
 	var tip_color:    Color   # colour of shaft, barrel, and sphere
+	var move_force:   float   # lateral drive force (scales with spin speed)
 
 
 # ── Part registries ────────────────────────────────────────────────────────────
@@ -60,9 +60,9 @@ static func _build_blades() -> Array:
 	# ── Attack ────────────────────────────────────────────────────────────────
 	d = BladeData.new()
 	d.display_name    = "Attack"
-	d.desc            = "High force and knockback, burns spin fast"
+	d.desc            = "High knockback, burns spin fast"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.move_force      = 24.0;  d.angular_damp   = 0.10
+	d.angular_damp    = 0.10
 	d.blade_thickness = 0.17;  d.blade_radius   = 0.45;  d.blade_y = 0.05
 	d.knockback       = 5.2;   d.ring_kb_mult   = 1.8
 	t.append(d)
@@ -72,7 +72,7 @@ static func _build_blades() -> Array:
 	d.display_name    = "Defense"
 	d.desc            = "Heavy rim, low knockback, hard to move"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.move_force      = 8.0;   d.angular_damp   = 0.03
+	d.angular_damp    = 0.03
 	d.blade_thickness = 0.21;  d.blade_radius   = 0.45;  d.blade_y = 0.03
 	d.knockback       = 0.7;   d.ring_kb_mult   = 1.2
 	t.append(d)
@@ -82,7 +82,7 @@ static func _build_blades() -> Array:
 	d.display_name    = "Stamina"
 	d.desc            = "Minimal drag, prioritises spin retention"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.move_force      = 10.0;  d.angular_damp   = 0.02
+	d.angular_damp    = 0.02
 	d.blade_thickness = 0.11;  d.blade_radius   = 0.45;  d.blade_y = 0.08
 	d.knockback       = 0.5;   d.ring_kb_mult   = 1.5
 	t.append(d)
@@ -98,8 +98,8 @@ static func _build_tracks() -> Array:
 	d = TrackData.new()
 	d.display_name   = "Attack"
 	d.desc           = "Strong gyro, quick boost, low inertia"
-	d.inertia_spin   = 0.28;  d.inertia_tilt  = 0.10
-	d.gyro_strength  = 1.2
+	d.inertia_spin   = 0.28;  d.inertia_tilt  = 0.22
+	d.gyro_strength  = 1.4
 	d.boost_amount   = 14.0;  d.boost_cooldown = 3.0
 	d.ring_y         = -0.02;  d.ring_radius = 0.27
 	d.ring_color     = Color(0.90, 0.22, 0.12)   # fiery red-orange
@@ -110,8 +110,8 @@ static func _build_tracks() -> Array:
 	d = TrackData.new()
 	d.display_name   = "Defense"
 	d.desc           = "High inertia, slow boost, hard to destabilise"
-	d.inertia_spin   = 0.72;  d.inertia_tilt  = 0.07
-	d.gyro_strength  = 0.8
+	d.inertia_spin   = 0.72;  d.inertia_tilt  = 0.30
+	d.gyro_strength  = 1.0
 	d.boost_amount   = 8.0;   d.boost_cooldown = 4.0
 	d.ring_y         = -0.02;  d.ring_radius = 0.18
 	d.ring_color     = Color(0.18, 0.48, 0.90)   # steel blue
@@ -122,8 +122,8 @@ static func _build_tracks() -> Array:
 	d = TrackData.new()
 	d.display_name   = "Stamina"
 	d.desc           = "Very high inertia, efficient boost"
-	d.inertia_spin   = 0.60;  d.inertia_tilt  = 0.08
-	d.gyro_strength  = 1.0
+	d.inertia_spin   = 0.60;  d.inertia_tilt  = 0.26
+	d.gyro_strength  = 1.1
 	d.boost_amount   = 10.0;  d.boost_cooldown = 3.5
 	d.ring_y         = -0.02
 	d.ring_radius    = 0.39
@@ -141,25 +141,28 @@ static func _build_tips() -> Array:
 	# ── Attack ────────────────────────────────────────────────────────────────
 	d = TipData.new()
 	d.display_name = "Attack"
-	d.desc         = "Small sharp tip, aggressive movement"
+	d.desc         = "Small sharp tip — high drive, spin-powered movement"
 	d.tip_radius   = 0.08;  d.tip_y = -0.23
 	d.tip_color    = Color(0.698, 0.092, 0.14)
+	d.move_force   = 26.0   # aggressive — full power at high spin
 	t.append(d)
 
 	# ── Defense ───────────────────────────────────────────────────────────────
 	d = TipData.new()
 	d.display_name = "Defense"
-	d.desc         = "Wide flat tip, stable and hard to knock over"
-	d.tip_radius   = 0.1;  d.tip_y = -0.23
+	d.desc         = "Wide flat tip — low drive, planted and hard to steer"
+	d.tip_radius   = 0.1;   d.tip_y = -0.23
 	d.tip_color    = Color(0.614, 0.177, 0.459, 1.0)
+	d.move_force   = 8.0    # sluggish — prioritises staying put
 	t.append(d)
 
 	# ── Stamina ───────────────────────────────────────────────────────────────
 	d = TipData.new()
 	d.display_name = "Stamina"
-	d.desc         = "Tiny precision tip, minimal floor friction"
+	d.desc         = "Tiny precision tip — efficient drive, minimal friction"
 	d.tip_radius   = 0.07;  d.tip_y = -0.22
 	d.tip_color    = Color(0.104, 0.34, 0.0, 1.0)
+	d.move_force   = 14.0   # controlled — smooth spin-relative movement
 	t.append(d)
 
 	return t
@@ -253,12 +256,32 @@ func start_spinning() -> void:
 func _physics_process(delta: float) -> void:
 	current_spin = angular_velocity.length()
 
-	# Gyroscopic stabilisation — uses Track gyro_strength.
-	var tr        := _track()
+	var tr := _track()
+
+	# ── Spin-relative tilt inertia ─────────────────────────────────────────────
+	# A real gyroscope resists tilting in proportion to its angular momentum.
+	# spin_t = 0 at death threshold, 1 at full speed.
+	# inertia_tilt scales from 40 % (wobbly, almost dead) up to 100 % (full spin).
+	var spin_t      := clampf((current_spin - death_spin_threshold) /
+	                          (initial_spin  - death_spin_threshold), 0.0, 1.0)
+	var live_tilt   := tr.inertia_tilt * (0.40 + 0.60 * spin_t)
+	inertia = Vector3(live_tilt, tr.inertia_spin, live_tilt)
+
+	# ── Gyroscopic stabilisation ───────────────────────────────────────────────
+	# Restoring torque proportional to tilt angle × current spin × gyro_strength.
 	var tilt_axis := basis.y.cross(Vector3.UP)
 	if tilt_axis.length_squared() > 1e-4:
 		var tilt_angle := basis.y.angle_to(Vector3.UP)
 		apply_torque(tilt_axis.normalized() * tilt_angle * current_spin * tr.gyro_strength)
+
+	# ── Wobble damping ─────────────────────────────────────────────────────────
+	# The gyro acts like a spring — without damping, tilt oscillates forever.
+	# We separate angular velocity into spin (world UP) and tilt (perpendicular),
+	# then damp only tilt. Damping also fades with spin so dying tops wobble visibly.
+	var spin_part   := Vector3.UP * angular_velocity.dot(Vector3.UP)
+	var wobble_part := angular_velocity - spin_part
+	var wobble_damp := tr.gyro_strength * 4.5 * spin_t   # weakens as top slows
+	angular_velocity -= wobble_part * clampf(wobble_damp * delta, 0.0, 0.45)
 
 	if not is_alive:
 		return
@@ -283,7 +306,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _handle_input() -> void:
-	var bd := _blade()
+	var tp := _tip()
 	var tr := _track()
 	var move_dir      := Vector2.ZERO
 	var boost_pressed := false
@@ -304,7 +327,13 @@ func _handle_input() -> void:
 				boost_pressed = Input.is_action_just_pressed("p2_boost")
 
 	if move_dir.length_squared() > 0.01:
-		apply_central_force(Vector3(move_dir.x, 0.0, move_dir.y).normalized() * bd.move_force)
+		# Drive force scales with spin — a fast top has more gyroscopic drive.
+		# spin_t: 0 at death threshold, 1 at full speed. Floor at 0.2 so the
+		# player retains minimal control even as the top is dying.
+		var spin_t       := clampf((current_spin - death_spin_threshold) /
+		                           (initial_spin  - death_spin_threshold), 0.0, 1.0)
+		var drive        := tp.move_force * (0.2 + 0.8 * spin_t)
+		apply_central_force(Vector3(move_dir.x, 0.0, move_dir.y).normalized() * drive)
 
 	if boost_pressed and _boost_cooldown <= 0.0:
 		var deficit := initial_spin - angular_velocity.dot(basis.y)
