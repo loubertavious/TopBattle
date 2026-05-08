@@ -1,0 +1,16 @@
+63f7b34db8d8cdea90c76aacccf841ec
+::res://::1778165045
+export_presets.cfg::TextFile::-1::1778133692::0::1::::<><><>0<>0<><>::
+::res://scenes/::1778132255
+main.tscn::PackedScene::2689834726303077141::1778132255::0::1::::<><><>0<>0<><>::uid://c4clu2g1k0pql::::res://scripts/game_manager.gd
+menu.tscn::PackedScene::-1::1778131650::0::1::::<><><>0<>0<><>::res://scripts/main_menu.gd
+::res://scripts/::1778156599
+game_manager.gd::GDScript::6813151619790755087::1778132553::0::1::::<>Node3D<><>0<>0<><>::
+game_manager_backup_classsystem.gd::GDScript::8767489529241318688::1778124639::0::1::::<>Node3D<><>0<>0<><>::
+game_settings.gd::GDScript::6869878601244627186::1778132172::0::1::::<>Node<><>0<>0<><>::
+hud.gd::GDScript::3520247665334446020::1778132577::0::1::::<>CanvasLayer<><>0<>0<><>::
+hud_backup_classsystem.gd::GDScript::3540768261480481684::1778124639::0::1::::<>CanvasLayer<><>0<>0<><>::
+main_menu.gd::GDScript::4969328526505891081::1778131491::0::1::::<>Node3D<><>0<>0<><>::
+top.gd::GDScript::5812264106882317150::1778156599::0::1::::<>RigidBody3D<><>0<>0<><>::
+top_backup_classystem.gd::GDScript::5029400038836612757::1778124639::0::1::::<>RigidBody3D<><>0<>0<><>::
+::res://TopGameExport/::1778133172

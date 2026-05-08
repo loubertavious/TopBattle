@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://menu_scene_tb"]
+
+[ext_resource type="Script" uid="uid://main_menu_tb" path="res://scripts/main_menu.gd" id="1_menu"]
+
+[node name="Menu" type="Node3D"]
+script = ExtResource("1_menu")
