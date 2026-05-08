@@ -62,7 +62,7 @@ static func _build_blades() -> Array:
 	d.display_name    = "Attack"
 	d.desc            = "High knockback, burns spin fast"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.angular_damp    = 0.10
+	d.angular_damp    = 0.18   # highest damp — trades spin for power
 	d.blade_thickness = 0.17;  d.blade_radius   = 0.45;  d.blade_y = 0.05
 	d.knockback       = 5.2;   d.ring_kb_mult   = 1.8
 	t.append(d)
@@ -70,9 +70,9 @@ static func _build_blades() -> Array:
 	# ── Defense ───────────────────────────────────────────────────────────────
 	d = BladeData.new()
 	d.display_name    = "Defense"
-	d.desc            = "Heavy rim, low knockback, hard to move"
+	d.desc            = "Heavy rim, low knockback, outlasts Attack"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.angular_damp    = 0.03
+	d.angular_damp    = 0.04   # low damp — heavy rim retains spin well
 	d.blade_thickness = 0.21;  d.blade_radius   = 0.45;  d.blade_y = 0.03
 	d.knockback       = 0.7;   d.ring_kb_mult   = 1.2
 	t.append(d)
@@ -80,9 +80,9 @@ static func _build_blades() -> Array:
 	# ── Stamina ───────────────────────────────────────────────────────────────
 	d = BladeData.new()
 	d.display_name    = "Stamina"
-	d.desc            = "Minimal drag, prioritises spin retention"
+	d.desc            = "Minimal drag, longest spin time"
 	d.disc_sides      = 16;    d.disc_radius    = 0.45
-	d.angular_damp    = 0.02
+	d.angular_damp    = 0.01   # near-zero damp — designed to outlast everything
 	d.blade_thickness = 0.11;  d.blade_radius   = 0.45;  d.blade_y = 0.08
 	d.knockback       = 0.5;   d.ring_kb_mult   = 1.5
 	t.append(d)
@@ -144,7 +144,7 @@ static func _build_tips() -> Array:
 	d.desc         = "Small sharp tip — high drive, spin-powered movement"
 	d.tip_radius   = 0.08;  d.tip_y = -0.23
 	d.tip_color    = Color(0.698, 0.092, 0.14)
-	d.move_force   = 26.0   # aggressive — full power at high spin
+	d.move_force   = 46.0   # aggressive — full power at high spin
 	t.append(d)
 
 	# ── Defense ───────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ static func _build_tips() -> Array:
 	d.desc         = "Wide flat tip — low drive, planted and hard to steer"
 	d.tip_radius   = 0.1;   d.tip_y = -0.23
 	d.tip_color    = Color(0.614, 0.177, 0.459, 1.0)
-	d.move_force   = 8.0    # sluggish — prioritises staying put
+	d.move_force   = 25.0    # sluggish — prioritises staying put
 	t.append(d)
 
 	# ── Stamina ───────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ static func _build_tips() -> Array:
 	d.desc         = "Tiny precision tip — efficient drive, minimal friction"
 	d.tip_radius   = 0.07;  d.tip_y = -0.22
 	d.tip_color    = Color(0.104, 0.34, 0.0, 1.0)
-	d.move_force   = 14.0   # controlled — smooth spin-relative movement
+	d.move_force   = 40.0   # controlled — smooth spin-relative movement
 	t.append(d)
 
 	return t
@@ -188,7 +188,7 @@ static func tip_desc(i: int)   -> String: return get_tips()[i].desc
 @export var blade_type:  int   = 0   # index into get_blades()
 @export var track_type:  int   = 0   # index into get_tracks()
 @export var tip_type:    int   = 0   # index into get_tips()
-@export var initial_spin: float = 70.0
+@export var initial_spin: float = 120.0
 @export var death_spin_threshold: float = 3.0
 
 var current_spin: float = 0.0
@@ -263,7 +263,7 @@ func _physics_process(delta: float) -> void:
 	# spin_t = 0 at death threshold, 1 at full speed.
 	# inertia_tilt scales from 40 % (wobbly, almost dead) up to 100 % (full spin).
 	var spin_t      := clampf((current_spin - death_spin_threshold) /
-	                          (initial_spin  - death_spin_threshold), 0.0, 1.0)
+							  (initial_spin  - death_spin_threshold), 0.0, 1.0)
 	var live_tilt   := tr.inertia_tilt * (0.40 + 0.60 * spin_t)
 	inertia = Vector3(live_tilt, tr.inertia_spin, live_tilt)
 
@@ -331,8 +331,8 @@ func _handle_input() -> void:
 		# spin_t: 0 at death threshold, 1 at full speed. Floor at 0.2 so the
 		# player retains minimal control even as the top is dying.
 		var spin_t       := clampf((current_spin - death_spin_threshold) /
-		                           (initial_spin  - death_spin_threshold), 0.0, 1.0)
-		var drive        := tp.move_force * (0.2 + 0.8 * spin_t)
+								   (initial_spin  - death_spin_threshold), 0.0, 1.0)
+		var drive        := tp.move_force * (0.1 + 0.9 * spin_t)
 		apply_central_force(Vector3(move_dir.x, 0.0, move_dir.y).normalized() * drive)
 
 	if boost_pressed and _boost_cooldown <= 0.0:

@@ -3,7 +3,7 @@ extends Node3D
 const TopScript = preload("res://scripts/top.gd")
 
 const ARENA_RADIUS := 6.5
-const BOWL_SPHERE_RADIUS := 13.0  # larger = shallower bowl
+const BOWL_SPHERE_RADIUS := 19.0  # larger = shallower bowl
 const ROUNDS_TO_WIN := 3
 
 # Part-selection step indices (sequential Blade → Track → Tip → Color).
