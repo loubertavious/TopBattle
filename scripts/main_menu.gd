@@ -263,6 +263,26 @@ func _tick_respawn(delta: float) -> void:
 
 
 # ── Environment ────────────────────────────────────────────────────────────────
+func _pick_random_sky() -> Texture2D:
+	var dir := DirAccess.open("res://assets/")
+	if not dir:
+		return null
+	var files: Array[String] = []
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if not dir.current_is_dir():
+			var low := f.to_lower()
+			if low.ends_with(".exr") or low.ends_with(".hdr"):
+				files.append("res://assets/" + f)
+		f = dir.get_next()
+	dir.list_dir_end()
+	if files.is_empty():
+		return null
+	files.shuffle()
+	return load(files[0]) as Texture2D
+
+
 func _setup_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50.0, 30.0, 0.0)
@@ -278,15 +298,28 @@ func _setup_environment() -> void:
 
 	var env_node := WorldEnvironment.new()
 	var env      := Environment.new()
-	env.background_mode        = Environment.BG_COLOR
-	env.background_color       = Color(0.05, 0.03, 0.10)
-	env.ambient_light_source   = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color    = Color(0.22, 0.16, 0.34)
-	env.ambient_light_energy   = 0.6
-	env.glow_enabled           = true
-	env.glow_intensity         = 0.7
-	env.glow_bloom             = 0.18
-	env_node.environment       = env
+
+	var sky_tex := _pick_random_sky()
+	if sky_tex:
+		var sky_mat          := PanoramaSkyMaterial.new()
+		sky_mat.panorama     = sky_tex
+		var sky              := Sky.new()
+		sky.sky_material     = sky_mat
+		env.background_mode  = Environment.BG_SKY
+		env.sky              = sky
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_energy = 0.5
+	else:
+		env.background_mode      = Environment.BG_COLOR
+		env.background_color     = Color(0.05, 0.03, 0.10)
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color  = Color(0.22, 0.16, 0.34)
+		env.ambient_light_energy = 0.6
+
+	env.glow_enabled     = true
+	env.glow_intensity   = 0.7
+	env.glow_bloom       = 0.18
+	env_node.environment = env
 	add_child(env_node)
 
 

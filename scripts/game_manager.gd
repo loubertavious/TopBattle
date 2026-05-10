@@ -185,6 +185,52 @@ func _advance_selection(pid: int, step: int, changed: bool) -> bool:
 
 # ── Setup helpers ──────────────────────────────────────────────────────────────
 
+# Returns a randomly chosen sky texture from res://assets/, or null if none found.
+# Supports .exr and .hdr — just drop files in the folder, no code changes needed.
+# Returns a randomly chosen floor texture from res://assets/floors/, or null.
+# Supports .png .jpg .jpeg .webp — drop files in the folder, no code changes needed.
+func _pick_random_floor() -> Texture2D:
+	var dir := DirAccess.open("res://assets/floors/")
+	if not dir:
+		return null
+	var files: Array[String] = []
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if not dir.current_is_dir():
+			var low := f.to_lower()
+			if low.ends_with(".png") or low.ends_with(".jpg") \
+					or low.ends_with(".jpeg") or low.ends_with(".webp") \
+					or low.ends_with(".exr"):
+				files.append("res://assets/floors/" + f)
+		f = dir.get_next()
+	dir.list_dir_end()
+	if files.is_empty():
+		return null
+	files.shuffle()
+	return load(files[0]) as Texture2D
+
+
+func _pick_random_sky() -> Texture2D:
+	var dir := DirAccess.open("res://assets/")
+	if not dir:
+		return null
+	var files: Array[String] = []
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if not dir.current_is_dir():
+			var low := f.to_lower()
+			if low.ends_with(".exr") or low.ends_with(".hdr"):
+				files.append("res://assets/" + f)
+		f = dir.get_next()
+	dir.list_dir_end()
+	if files.is_empty():
+		return null
+	files.shuffle()
+	return load(files[0]) as Texture2D
+
+
 func _setup_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50.0, 30.0, 0.0)
@@ -199,15 +245,29 @@ func _setup_environment() -> void:
 	add_child(fill)
 
 	var env_node := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.07, 0.04, 0.12)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.25, 0.18, 0.38)
-	env.ambient_light_energy = 0.6
-	env.glow_enabled = true
+	var env      := Environment.new()
+
+	var sky_tex := _pick_random_sky()
+	if sky_tex:
+		var sky_mat          := PanoramaSkyMaterial.new()
+		sky_mat.panorama     = sky_tex
+		var sky              := Sky.new()
+		sky.sky_material     = sky_mat
+		env.background_mode  = Environment.BG_SKY
+		env.sky              = sky
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_energy = 0.5
+	else:
+		# Fallback if texture hasn't been imported yet
+		env.background_mode       = Environment.BG_COLOR
+		env.background_color      = Color(0.07, 0.04, 0.12)
+		env.ambient_light_source  = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color   = Color(0.25, 0.18, 0.38)
+		env.ambient_light_energy  = 0.6
+
+	env.glow_enabled   = true
 	env.glow_intensity = 0.6
-	env.glow_bloom = 0.15
+	env.glow_bloom     = 0.15
 	env_node.environment = env
 	add_child(env_node)
 
@@ -233,14 +293,11 @@ func _build_stadium_classic() -> void:
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back;
 
-uniform vec4  base_color  : source_color = vec4(0.10, 0.13, 0.08, 1.0);
-uniform vec4  grid_color  : source_color = vec4(0.22, 0.38, 0.18, 1.0);
-uniform vec4  grid_emit   : source_color = vec4(0.18, 0.36, 0.14, 1.0);
-uniform float grid_size   : hint_range(0.25, 4.0, 0.25) = 1.0;
-uniform float line_width  : hint_range(0.01, 0.15, 0.005) = 0.035;
-uniform float emit_str    : hint_range(0.0, 6.0, 0.1)  = 2.2;
-uniform float pulse_speed : hint_range(0.0, 2.0, 0.05) = 0.4;
-uniform float arena_radius: hint_range(1.0, 20.0) = 6.5;
+uniform vec4      base_color    : source_color = vec4(0.10, 0.13, 0.08, 1.0);
+uniform sampler2D floor_texture : source_color, hint_default_white;
+uniform bool      has_texture   = false;
+uniform float     texture_scale : hint_range(0.1, 8.0, 0.1) = 2.0;
+uniform float     texture_blend : hint_range(0.0, 1.0, 0.05) = 0.6;
 
 varying vec3 world_pos;
 
@@ -249,23 +306,12 @@ void vertex() {
 }
 
 void fragment() {
-	// Grid lines from world XZ — stays straight on the curved surface.
-	vec2  uv   = world_pos.xz / grid_size;
-	vec2  f    = fract(uv);
-	float line = 1.0 - smoothstep(0.0, line_width, min(min(f.x, 1.0 - f.x),
-	                                                     min(f.y, 1.0 - f.y)));
-
-	// Subtle outward travel pulse so the grid feels alive.
-	float dist   = length(world_pos.xz);
-	float wave   = 0.5 + 0.5 * sin((dist * 1.2 - TIME * pulse_speed) * TAU);
-	float pulse  = mix(0.75, 1.0, wave * 0.4);
-
-	// Fade grid toward the rim so edges don't look clipped.
-	float rim_fade = 1.0 - smoothstep(0.65, 1.0, dist / arena_radius);
-	line *= rim_fade;
-
-	ALBEDO    = mix(base_color.rgb, grid_color.rgb, line);
-	EMISSION  = grid_emit.rgb * line * emit_str * pulse;
+	vec3 col = base_color.rgb;
+	if (has_texture) {
+		vec3 tex_col = texture(floor_texture, world_pos.xz / texture_scale * 0.5 + 0.5).rgb;
+		col = mix(col, tex_col, texture_blend);
+	}
+	ALBEDO    = col;
 	ROUGHNESS = 0.82;
 	METALLIC  = 0.12;
 }
@@ -273,6 +319,12 @@ void fragment() {
 	var bowl_mat := ShaderMaterial.new()
 	bowl_mat.shader = bowl_shader
 	bowl_mat.set_shader_parameter("arena_radius", ARENA_RADIUS)
+
+	var floor_tex := _pick_random_floor()
+	if floor_tex:
+		bowl_mat.set_shader_parameter("floor_texture", floor_tex)
+		bowl_mat.set_shader_parameter("has_texture", true)
+
 	bowl_mesh.surface_set_material(0, bowl_mat)
 	var bowl_inst := MeshInstance3D.new()
 	bowl_inst.mesh = bowl_mesh
@@ -545,6 +597,9 @@ func _start_countdown() -> void:
 	_countdown_timer = 3.0
 	_spawn_tops()
 	_hud.update_scores(_scores[1], _scores[2])
+	_hud.update_player_colors(
+		GameSettings.get_color(_p1_color_idx),
+		GameSettings.get_color(_p2_color_idx))
 	_hud.show_message("Fight in 3…")
 
 

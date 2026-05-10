@@ -6,6 +6,8 @@ var _p1_score_label: Label
 var _p2_score_label: Label
 var _message_label:  Label
 var _boost_bars: Array[ProgressBar] = []
+var _p1_bar_style:   StyleBoxFlat
+var _p2_bar_style:   StyleBoxFlat
 
 # Shape selection panel
 var _shape_panel: PanelContainer
@@ -84,14 +86,14 @@ func _build_ui() -> void:
 	score_hbox.add_child(_p2_score_label)
 
 	# ── Boost bars — bottom corners ────────────────────────────────────────────
-	var p1_bar := _make_boost_bar(Color(0.4, 0.7, 1.0))
+	var p1_bar := _make_boost_bar(Color(0.4, 0.7, 1.0), _p1_bar_style)
 	p1_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
 	p1_bar.offset_bottom = -20; p1_bar.offset_left  = 20
 	p1_bar.offset_top    = -50; p1_bar.offset_right = 220
 	root.add_child(p1_bar)
 	_boost_bars.append(p1_bar)
 
-	var p2_bar := _make_boost_bar(Color(1.0, 0.4, 0.4))
+	var p2_bar := _make_boost_bar(Color(1.0, 0.4, 0.4), _p2_bar_style)
 	p2_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 	p2_bar.offset_bottom = -20; p2_bar.offset_right = -20
 	p2_bar.offset_top    = -50; p2_bar.offset_left  = -220
@@ -278,6 +280,14 @@ func update_scores(p1: int, p2: int) -> void:
 	_p2_score_label.text = "P2: %d" % p2
 
 
+# Call when players confirm their colours so the HUD matches the top colours.
+func update_player_colors(p1_color: Color, p2_color: Color) -> void:
+	_p1_score_label.add_theme_color_override("font_color", p1_color)
+	_p2_score_label.add_theme_color_override("font_color", p2_color)
+	if _p1_bar_style: _p1_bar_style.bg_color = p1_color
+	if _p2_bar_style: _p2_bar_style.bg_color = p2_color
+
+
 func show_message(text: String) -> void:
 	_message_label.text = text
 
@@ -440,7 +450,7 @@ func _make_label(text: String, color: Color, size: int) -> Label:
 	return lbl
 
 
-func _make_boost_bar(color: Color) -> ProgressBar:
+func _make_boost_bar(color: Color, style_out: StyleBoxFlat) -> ProgressBar:
 	var bar := ProgressBar.new()
 	bar.min_value = 0.0
 	bar.max_value = 100.0
@@ -451,6 +461,12 @@ func _make_boost_bar(color: Color) -> ProgressBar:
 	style.bg_color = color
 	style.set_corner_radius_all(4)
 	bar.add_theme_stylebox_override("fill", style)
+	# Store reference so update_player_colors() can recolour it later.
+	# GDScript passes objects by reference, so we assign back via the caller's var.
+	if _p1_bar_style == null:
+		_p1_bar_style = style
+	else:
+		_p2_bar_style = style
 	var bg_style := StyleBoxFlat.new()
 	bg_style.bg_color = Color(0.15, 0.15, 0.15, 0.8)
 	bg_style.set_corner_radius_all(4)
