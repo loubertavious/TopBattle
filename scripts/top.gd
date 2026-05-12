@@ -765,6 +765,25 @@ func _die() -> void:
 		_trail_particles.emitting = false
 
 
+func _flash_trail_boost() -> void:
+	if _trail_mesh_mat == null:
+		return
+	# Ramp emission up to a bright flare then settle back to idle level.
+	var tween := create_tween()
+	tween.tween_property(_trail_mesh_mat, "emission_energy_multiplier", 10.0, 0.07)\
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tween.tween_property(_trail_mesh_mat, "emission_energy_multiplier", 3.0,  0.50)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	# Also briefly widen particles so the burst reads as an explosion of sparks.
+	if _trail_proc_mat:
+		var t2 := create_tween().set_parallel(true)
+		t2.tween_property(_trail_proc_mat, "scale_min", 0.16, 0.07)
+		t2.tween_property(_trail_proc_mat, "scale_max", 0.24, 0.07)
+		t2.chain().set_parallel(true)
+		t2.tween_property(_trail_proc_mat, "scale_min", 0.07, 0.45)
+		t2.tween_property(_trail_proc_mat, "scale_max", 0.11, 0.45)
+
+
 func _update_label() -> void:
 	if not _spin_label:
 		return
