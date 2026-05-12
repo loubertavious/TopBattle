@@ -202,12 +202,33 @@ var _boost_cooldown:      float = 0.0
 var _boost_charge:        float = 1.0
 var _low_spin_timer:      float = 0.0
 var _wall_spark_cooldown: float = 0.0
+var _tip_col:   CollisionShape3D   # tip contact sphere
 var _ring_col:  CollisionShape3D   # energy ring outer cylinder
 var _track_col: CollisionShape3D   # track body inner drum
 var _clash_cooldowns: Dictionary = {}
 var _spin_label:      Label3D
 var _collision_parts: Array[MeshInstance3D] = []
 var _flash_mats: Array[StandardMaterial3D] = []
+
+# ── Trail ──────────────────────────────────────────────────────────────────────
+var _trail_particles: GPUParticles3D
+var _trail_mesh_mat:  StandardMaterial3D   # controls emission colour / energy
+var _trail_proc_mat:  ParticleProcessMaterial
+
+# ── Audio ──────────────────────────────────────────────────────────────────────
+var _clash_player: AudioStreamPlayer3D   # top-vs-top hit
+var _wall_player:  AudioStreamPlayer3D   # bowl/wall hit
+
+# ── Sound pools (static — loaded once, shared by both tops) ────────────────────
+# Top-vs-top contact pools (fall back left-to-right when empty):
+#   clash_blade → clash_ring / clash_body → clash_blade
+static var _s_clash_blade: Array = []   # outer disc / default clash
+static var _s_clash_ring:  Array = []   # energy ring hit
+static var _s_clash_body:  Array = []   # track body / inner drum hit
+# Bowl / wall contact pools:
+static var _s_wall_blade: Array = []    # blade or side hitting the bowl wall
+static var _s_wall_tip:   Array = []    # tip scraping the bowl floor
+static var _s_sounds_loaded: bool = false
 
 const LOW_SPIN_GRACE := 0.6
 
@@ -225,6 +246,7 @@ func _tip() -> TipData:
 
 func _ready() -> void:
 	_build_mesh()
+	_build_trail()
 
 	var bd := _blade()
 	var tr := _track()
@@ -242,6 +264,174 @@ func _ready() -> void:
 	max_contacts_reported = 4
 	body_shape_entered.connect(_on_body_shape_entered)
 
+	# ── Audio players ──────────────────────────────────────────────────────────
+	_clash_player = AudioStreamPlayer3D.new()
+	_clash_player.max_db             = 6.0
+	_clash_player.unit_size          = 6.0   # attenuation reference distance
+	_clash_player.max_distance       = 40.0
+	add_child(_clash_player)
+
+	_wall_player = AudioStreamPlayer3D.new()
+	_wall_player.max_db        = 2.0
+	_wall_player.unit_size     = 6.0
+	_wall_player.max_distance  = 40.0
+	add_child(_wall_player)
+
+	if not _s_sounds_loaded:
+		_s_sounds_loaded = true
+		_load_sounds()
+
+
+static func _load_sounds() -> void:
+	# Scans res://assets/sounds/ and routes each file into a pool by prefix:
+	#
+	#   clash_blade_*  → blade / disc contact (default clash fallback)
+	#   clash_ring_*   → energy ring hit
+	#   clash_body_*   → inner track body hit
+	#   wall_blade_*   → blade or side hits the bowl wall
+	#   wall_tip_*     → tip scrapes the bowl floor
+	#
+	# Any file beginning with just "clash" (no sub-type) goes into clash_blade.
+	# Any file beginning with just "wall"  (no sub-type) goes into wall_blade.
+	var dir := DirAccess.open("res://assets/sounds/")
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if not dir.current_is_dir():
+			var lower := fname.to_lower()
+			if lower.ends_with(".wav") or lower.ends_with(".ogg") or lower.ends_with(".mp3"):
+				var stream := load("res://assets/sounds/" + fname) as AudioStream
+				if stream:
+					if   lower.begins_with("clash_ring"):  _s_clash_ring.append(stream)
+					elif lower.begins_with("clash_body"):  _s_clash_body.append(stream)
+					elif lower.begins_with("clash"):       _s_clash_blade.append(stream)
+					elif lower.begins_with("wall_tip"):    _s_wall_tip.append(stream)
+					elif lower.begins_with("wall"):        _s_wall_blade.append(stream)
+		fname = dir.get_next()
+	# Fill any empty pool with a synthesised placeholder so the game always has audio.
+	_generate_placeholder_sounds()
+
+
+# Fills pools that are still empty with procedurally-generated metallic tones.
+# Call after scanning — real files take priority, synth fills the gaps.
+static func _generate_placeholder_sounds() -> void:
+	# base_hz, partials (ratio × base), decay rate, duration (s)
+	if _s_clash_blade.is_empty():
+		_s_clash_blade.append(_synth_metal(900.0,  [1.0, 2.40, 4.10], 8.0,  0.35))
+	if _s_clash_ring.is_empty():
+		_s_clash_ring.append( _synth_metal(580.0,  [1.0, 2.76, 5.40], 4.0,  0.55))
+	if _s_clash_body.is_empty():
+		_s_clash_body.append( _synth_metal(270.0,  [1.0, 1.80],       16.0, 0.22))
+	if _s_wall_blade.is_empty():
+		_s_wall_blade.append( _synth_metal(1050.0, [1.0, 3.10],       11.0, 0.28))
+	if _s_wall_tip.is_empty():
+		_s_wall_tip.append(   _synth_metal(400.0,  [1.0, 1.55],       20.0, 0.14))
+
+
+# Synthesises a single AudioStreamWAV from a set of decaying sinusoids.
+#
+#   base_hz    — fundamental pitch of the strike
+#   ratios     — frequency multiples (inharmonic ratios give metallic character)
+#   decay      — exponential decay rate (larger = shorter ring)
+#   duration_s — total clip length in seconds
+#
+# The first 5 ms has a noise transient (pseudo-random) to simulate the attack click.
+static func _synth_metal(base_hz: float, ratios: Array,
+		decay: float, duration_s: float) -> AudioStreamWAV:
+	const SR := 22050
+	var n   := int(SR * duration_s)
+	var buf := PackedByteArray()
+	buf.resize(n * 2)
+
+	var amp_per := 0.85 / ratios.size()
+
+	for i in range(n):
+		var t        := float(i) / float(SR)
+		var envelope := exp(-decay * t)
+
+		# Deterministic pseudo-noise for the attack transient (first 5 ms).
+		# Uses a simple hash so it works inside a static function.
+		var noise := 0.0
+		if t < 0.005:
+			var h     := fmod(sin(float(i) * 127.1 + 311.7) * 43758.545, 1.0)
+			noise      = (h * 2.0 - 1.0) * (1.0 - t / 0.005) * 0.40
+
+		var sample := noise
+		for r in ratios:
+			sample += amp_per * sin(TAU * base_hz * float(r) * t)
+		sample *= envelope
+
+		var v := clampi(int(sample * 28000.0), -32768, 32767)
+		buf[i * 2]     = v & 0xFF
+		buf[i * 2 + 1] = (v >> 8) & 0xFF
+
+	var wav        := AudioStreamWAV.new()
+	wav.format     = AudioStreamWAV.FORMAT_16_BITS
+	wav.stereo     = false
+	wav.mix_rate   = SR
+	wav.data       = buf
+	return wav
+
+
+func _build_trail() -> void:
+	# Particles are emitted in world space (local_coords = false) so they stay
+	# at the position they were born while the top moves away — giving a natural
+	# trailing ribbon without any additional position tracking.
+	_trail_particles = GPUParticles3D.new()
+	_trail_particles.emitting      = false
+	_trail_particles.amount        = 32
+	_trail_particles.lifetime      = 0.45
+	_trail_particles.explosiveness = 0.0   # continuous stream
+	_trail_particles.randomness    = 0.0
+	_trail_particles.local_coords  = false  # world-space → forms the trail
+	_trail_particles.fixed_fps     = 0      # interpolate smoothly
+
+	# Process material — no velocity, no gravity; particles just hang in space.
+	var proc := ParticleProcessMaterial.new()
+	proc.direction           = Vector3.ZERO
+	proc.spread              = 4.0
+	proc.gravity             = Vector3.ZERO
+	proc.initial_velocity_min = 0.0
+	proc.initial_velocity_max = 0.02
+
+	# Alpha fades from opaque at birth to transparent at death.
+	var grad := Gradient.new()
+	grad.set_color(0, Color(top_color.r, top_color.g, top_color.b, 0.90))
+	grad.set_color(1, Color(top_color.r, top_color.g, top_color.b, 0.00))
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	proc.color_ramp = grad_tex
+
+	proc.scale_min = 0.07
+	proc.scale_max = 0.11
+	_trail_proc_mat = proc
+	_trail_particles.process_material = proc
+
+	# Low-poly sphere per particle — unshaded so the colour is always vivid.
+	var sphere := SphereMesh.new()
+	sphere.radius          = 0.065
+	sphere.height          = 0.13
+	sphere.radial_segments = 4
+	sphere.rings           = 2
+
+	var mesh_mat := StandardMaterial3D.new()
+	mesh_mat.shading_mode              = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh_mat.vertex_color_use_as_albedo = true   # particle colour ramp drives albedo + alpha
+	mesh_mat.albedo_color              = top_color
+	mesh_mat.emission_enabled          = true
+	mesh_mat.emission                  = top_color
+	mesh_mat.emission_energy_multiplier = 3.0
+	mesh_mat.transparency              = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_trail_mesh_mat = mesh_mat
+	sphere.surface_set_material(0, mesh_mat)
+
+	_trail_particles.draw_pass_1 = sphere
+	# Emit from just above the tip so sparks don't clip through the floor.
+	_trail_particles.position = Vector3(0.0, _tip().tip_y + 0.06, 0.0)
+	add_child(_trail_particles)
+
 
 func start_spinning() -> void:
 	is_alive = true
@@ -251,6 +441,8 @@ func start_spinning() -> void:
 	rotation         = Vector3.ZERO
 	linear_velocity  = Vector3.ZERO
 	angular_velocity = Vector3.UP * initial_spin
+	if _trail_particles:
+		_trail_particles.emitting = true
 
 
 func _physics_process(delta: float) -> void:
@@ -341,6 +533,7 @@ func _handle_input() -> void:
 			angular_velocity += basis.y * minf(tr.boost_amount * _boost_charge, deficit)
 		_boost_cooldown = tr.boost_cooldown
 		_boost_charge   = maxf(0.1, _boost_charge - 0.28)
+		_flash_trail_boost()
 
 
 func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, local_shape_index: int) -> void:
@@ -368,6 +561,14 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 		var hit_ring  := (_ring_col  != null and hit_node == _ring_col)
 		var hit_track := (_track_col != null and hit_node == _track_col)
 
+		# Play the sound that matches the part that was struck on this top.
+		if hit_ring:
+			_play_clash_sound(rel_speed, "ring")
+		elif hit_track:
+			_play_clash_sound(rel_speed, "body")
+		else:
+			_play_clash_sound(rel_speed, "blade")
+
 		var bd  := _blade()
 		var tr  := _track()
 		var kb  := bd.knockback * clampf(rel_speed * 0.2, 0.3, 3.0)
@@ -383,10 +584,16 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 			return
 		_wall_spark_cooldown = 0.25
 
+		# Which part of this top is touching the bowl?
+		var wall_owner_id  := shape_find_owner(local_shape_index)
+		var wall_hit_node  := shape_owner_get_owner(wall_owner_id)
+		var tip_touching   := (_tip_col != null and wall_hit_node == _tip_col)
+
 		var hit_dir     := linear_velocity.normalized()
 		var contact_pos := global_position + hit_dir * _blade().disc_radius
 		contact_pos.y   = global_position.y + 0.11
 		_spawn_wall_sparks(contact_pos, -hit_dir, speed)
+		_play_wall_sound(speed, tip_touching)
 
 
 func _flash_collision() -> void:
@@ -401,6 +608,53 @@ func _flash_collision() -> void:
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tween.tween_property(mat, "emission_energy_multiplier", original_energy, 0.18)\
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+func _play_clash_sound(rel_speed: float, contact: String) -> void:
+	if _clash_player == null:
+		return
+	# Map contact type to pool key and check if it's enabled in the dev console.
+	var pool_key: String
+	match contact:
+		"ring":  pool_key = "clash_ring"
+		"body":  pool_key = "clash_body"
+		_:       pool_key = "clash_blade"
+	if not GameSettings.sound_enabled.get(pool_key, true):
+		return
+	# Pick the pool, fall back to blade pool if specific pool is empty.
+	var pool: Array
+	match contact:
+		"ring":  pool = _s_clash_ring  if not _s_clash_ring.is_empty()  else _s_clash_blade
+		"body":  pool = _s_clash_body  if not _s_clash_body.is_empty()  else _s_clash_blade
+		_:       pool = _s_clash_blade
+	if pool.is_empty():
+		return
+	_clash_player.stream      = pool[randi() % pool.size()]
+	_clash_player.volume_db   = lerpf(-10.0, 3.0, clampf(rel_speed / 7.0, 0.0, 1.0))
+	_clash_player.pitch_scale = randf_range(0.92, 1.08)
+	_clash_player.play()
+
+
+func _play_wall_sound(speed: float, is_tip: bool) -> void:
+	if _wall_player == null:
+		return
+	# Check dev-console enable flag before playing.
+	var pool_key := "wall_tip" if is_tip else "wall_blade"
+	if not GameSettings.sound_enabled.get(pool_key, true):
+		return
+	# Tip-on-floor: softer scrape. Blade-on-wall: sharp impact.
+	var pool: Array
+	if is_tip:
+		pool = _s_wall_tip   if not _s_wall_tip.is_empty()   else _s_wall_blade
+	else:
+		pool = _s_wall_blade if not _s_wall_blade.is_empty() else _s_wall_tip
+	if pool.is_empty():
+		return
+	var vol_range := Vector2(-18.0, -4.0) if is_tip else Vector2(-12.0, 1.0)
+	_wall_player.stream      = pool[randi() % pool.size()]
+	_wall_player.volume_db   = lerpf(vol_range.x, vol_range.y, clampf(speed / 5.0, 0.0, 1.0))
+	_wall_player.pitch_scale = randf_range(0.90, 1.10)
+	_wall_player.play()
 
 
 func _spawn_clash_sparks(pos: Vector3, dir: Vector3, _intensity: float) -> void:
@@ -506,6 +760,9 @@ func _die() -> void:
 	angular_damp = 3.0
 	linear_damp  = 0.3
 	top_died.emit(player_id)
+	# Stop spawning new trail particles; already-live ones fade out naturally.
+	if _trail_particles:
+		_trail_particles.emitting = false
 
 
 func _update_label() -> void:
@@ -735,6 +992,7 @@ func _build_collision() -> void:
 	tip_col.shape    = tip_shape
 	tip_col.position = Vector3(0.0, tp.tip_y, 0.0)
 	add_child(tip_col)
+	_tip_col = tip_col
 
 	# ── Shaft cylinder ─────────────────────────────────────────────────────────
 	# Tapered tube from barrel top up to disc bottom (y = 0.04).

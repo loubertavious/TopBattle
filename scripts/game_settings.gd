@@ -3,6 +3,25 @@ extends Node
 # Shared game settings passed between scenes.
 var vs_bot: bool = false
 
+# ── Dev-console live state ──────────────────────────────────────────────────────
+
+# Which sound pools are active. wall_tip is off by default (very frequent, subtle).
+var sound_enabled: Dictionary = {
+	"clash_blade": true,
+	"clash_ring":  true,
+	"clash_body":  true,
+	"wall_blade":  true,
+	"wall_tip":    false,
+}
+
+# Live references set by game_manager after building the arena.
+# Null when no game is running (e.g. main menu).
+var bowl_mat:  ShaderMaterial   = null
+var world_env: WorldEnvironment = null
+var rim_mat:   StandardMaterial3D = null   # decorative torus at bowl lip
+var wall_mat:  StandardMaterial3D = null   # shared arc-wall panel material
+var rim_light: OmniLight3D        = null   # ambient glow ring
+
 const SAVE_PATH     := "user://profiles.cfg"
 const PROFILE_SLOTS := 4
 

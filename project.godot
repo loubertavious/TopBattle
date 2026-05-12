@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 GameSettings="*res://scripts/game_settings.gd"
+DevConsole="*res://scripts/dev_console.gd"
 
 [display]
 
