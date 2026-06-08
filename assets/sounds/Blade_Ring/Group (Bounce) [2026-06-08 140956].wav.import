@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://cfle848uon4rl"
+path="res://.godot/imported/Group (Bounce) [2026-06-08 140956].wav-2793f5d34078a453bb0f1f24c88a75fd.sample"
+
+[deps]
+
+source_file="res://assets/sounds/Blade_Ring/Group (Bounce) [2026-06-08 140956].wav"
+dest_files=["res://.godot/imported/Group (Bounce) [2026-06-08 140956].wav-2793f5d34078a453bb0f1f24c88a75fd.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

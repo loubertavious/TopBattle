@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://bpgmm7ltng826"
+path="res://.godot/imported/Group (Bounce) [2026-06-08 141036].wav-b35a7ced136f7df28bbd8fb4f1c77016.sample"
+
+[deps]
+
+source_file="res://assets/sounds/Blade_Track/Group (Bounce) [2026-06-08 141036].wav"
+dest_files=["res://.godot/imported/Group (Bounce) [2026-06-08 141036].wav-b35a7ced136f7df28bbd8fb4f1c77016.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2
