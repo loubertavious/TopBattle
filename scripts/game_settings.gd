@@ -14,6 +14,14 @@ var sound_enabled: Dictionary = {
 	"wall_tip":    false,
 }
 
+# Scale applied to all loaded .glb part models.
+# 1.0 = exported in metres (correct). 0.01 = exported in centimetres (Fusion 360 default).
+var model_import_scale:   float = 0.018
+var model_y_offset:       float = -0.25
+
+# Live top references — populated by game_manager, used by dev console for live edits.
+var live_tops: Array = []
+
 # Live references set by game_manager after building the arena.
 # Null when no game is running (e.g. main menu).
 var bowl_mat:  ShaderMaterial   = null

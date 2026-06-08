@@ -27,10 +27,15 @@ var _bowl_picker: ColorPickerButton
 var _sky_picker:  ColorPickerButton
 var _rim_picker:  ColorPickerButton
 var _wall_picker: ColorPickerButton
+var _model_scale_spin:    SpinBox
+var _model_y_offset_spin: SpinBox
+var _pause_btn:           Button
 
 
 func _ready() -> void:
 	layer = 128   # render above everything
+	# Keep the console running while the game is paused so adjustments still work.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_ui()
 	_panel.visible = false
 
@@ -40,6 +45,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_panel.visible = not _panel.visible
 		if _panel.visible:
 			_refresh_pickers()   # sync colour buttons to current state
+		else:
+			# Auto-unpause when closing the console so the game can't get stuck frozen.
+			if get_tree().paused:
+				get_tree().paused  = false
+				_pause_btn.text    = "⏸   PAUSE"
 		get_viewport().set_input_as_handled()
 
 
@@ -51,7 +61,7 @@ func _build_ui() -> void:
 	_panel.offset_right  = -14
 	_panel.offset_top    =  14
 	_panel.offset_left   = -430
-	_panel.offset_bottom =  590
+	_panel.offset_bottom =  760
 
 	var chrome := StyleBoxFlat.new()
 	chrome.bg_color     = Color(0.05, 0.04, 0.12, 0.97)
@@ -82,6 +92,14 @@ func _build_ui() -> void:
 
 	var hint := _make_label("F12", Color(0.45, 0.45, 0.52), 12)
 	title_row.add_child(hint)
+
+	# ── Pause button ───────────────────────────────────────────────────────────
+	_pause_btn = Button.new()
+	_pause_btn.text = "⏸   PAUSE"
+	_pause_btn.add_theme_font_size_override("font_size", 13)
+	_pause_btn.add_theme_color_override("font_color", Color(0.20, 0.90, 0.55))
+	_pause_btn.pressed.connect(_on_pause_toggled)
+	root_vbox.add_child(_pause_btn)
 
 	root_vbox.add_child(_make_separator())
 
@@ -117,7 +135,7 @@ func _build_ui() -> void:
 	bowl_row.add_child(bowl_lbl)
 
 	_bowl_picker = ColorPickerButton.new()
-	_bowl_picker.color               = Color(0.45, 0.03, 0.04)   # shader default
+	_bowl_picker.color               = Color(0.08, 0.08, 0.10)   # shader default
 	_bowl_picker.custom_minimum_size = Vector2(80, 30)
 	_bowl_picker.color_changed.connect(_on_bowl_color_changed)
 	bowl_row.add_child(_bowl_picker)
@@ -137,7 +155,7 @@ func _build_ui() -> void:
 	sky_row.add_child(sky_lbl)
 
 	_sky_picker = ColorPickerButton.new()
-	_sky_picker.color               = Color(0.06, 0.03, 0.18)   # env default
+	_sky_picker.color               = Color(0.12, 0.12, 0.14)   # env default
 	_sky_picker.custom_minimum_size = Vector2(80, 30)
 	_sky_picker.color_changed.connect(_on_sky_color_changed)
 	sky_row.add_child(_sky_picker)
@@ -163,7 +181,7 @@ func _build_ui() -> void:
 	rim_row.add_child(rim_lbl)
 
 	_rim_picker = ColorPickerButton.new()
-	_rim_picker.color               = Color(0.97, 0.62, 0.65)   # matches ring_light default
+	_rim_picker.color               = Color(0.65, 0.65, 0.70)   # matches ring_light default
 	_rim_picker.custom_minimum_size = Vector2(80, 30)
 	_rim_picker.color_changed.connect(_on_rim_color_changed)
 	rim_row.add_child(_rim_picker)
@@ -183,10 +201,57 @@ func _build_ui() -> void:
 	wall_row.add_child(wall_lbl)
 
 	_wall_picker = ColorPickerButton.new()
-	_wall_picker.color               = Color(0.45, 0.03, 0.04)   # matches seg_mat default
+	_wall_picker.color               = Color(0.28, 0.28, 0.32)   # matches seg_mat default
 	_wall_picker.custom_minimum_size = Vector2(80, 30)
 	_wall_picker.color_changed.connect(_on_wall_color_changed)
 	wall_row.add_child(_wall_picker)
+
+	root_vbox.add_child(_make_separator())
+
+	# ── Model import scale ─────────────────────────────────────────────────────
+	root_vbox.add_child(_make_section_label("MODEL SCALE"))
+
+	var scale_row := HBoxContainer.new()
+	scale_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	scale_row.add_theme_constant_override("separation", 10)
+	root_vbox.add_child(scale_row)
+
+	var scale_lbl := _make_label("Import scale", Color(0.70, 0.70, 0.78), 13)
+	scale_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scale_row.add_child(scale_lbl)
+
+	_model_scale_spin = SpinBox.new()
+	_model_scale_spin.min_value    = 0.001
+	_model_scale_spin.max_value    = 2.0
+	_model_scale_spin.step         = 0.001
+	_model_scale_spin.value        = GameSettings.model_import_scale   # default 0.018
+	_model_scale_spin.custom_minimum_size = Vector2(110, 30)
+	_model_scale_spin.value_changed.connect(_on_model_scale_changed)
+	scale_row.add_child(_model_scale_spin)
+
+	var y_row := HBoxContainer.new()
+	y_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	y_row.add_theme_constant_override("separation", 10)
+	root_vbox.add_child(y_row)
+
+	var y_lbl := _make_label("Y offset", Color(0.70, 0.70, 0.78), 13)
+	y_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	y_row.add_child(y_lbl)
+
+	_model_y_offset_spin = SpinBox.new()
+	_model_y_offset_spin.min_value    = -5.0
+	_model_y_offset_spin.max_value    =  5.0
+	_model_y_offset_spin.step         =  0.001
+	_model_y_offset_spin.value        = GameSettings.model_y_offset   # default -0.25
+	_model_y_offset_spin.custom_minimum_size = Vector2(110, 30)
+	_model_y_offset_spin.value_changed.connect(_on_model_y_offset_changed)
+	y_row.add_child(_model_y_offset_spin)
+
+	var scale_note := _make_label(
+		"1.0 = metres  •  0.01 = centimetres\nTakes effect on next round.",
+		Color(0.38, 0.38, 0.45), 11)
+	scale_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root_vbox.add_child(scale_note)
 
 	root_vbox.add_child(_make_separator())
 
@@ -242,6 +307,33 @@ func _on_wall_color_changed(color: Color) -> void:
 		GameSettings.wall_mat.emission     = color
 
 
+func _on_model_scale_changed(value: float) -> void:
+	GameSettings.model_import_scale = value
+	_apply_live_model_adjustments()
+
+
+func _on_model_y_offset_changed(value: float) -> void:
+	GameSettings.model_y_offset = value
+	_apply_live_model_adjustments()
+
+
+func _on_pause_toggled() -> void:
+	get_tree().paused = not get_tree().paused
+	if get_tree().paused:
+		_pause_btn.text = "▶   RESUME"
+		_pause_btn.add_theme_color_override("font_color", Color(1.0, 0.55, 0.15))
+	else:
+		_pause_btn.text = "⏸   PAUSE"
+		_pause_btn.add_theme_color_override("font_color", Color(0.20, 0.90, 0.55))
+
+
+# Pushes current scale + Y offset to all live top models immediately.
+func _apply_live_model_adjustments() -> void:
+	for top in GameSettings.live_tops:
+		if is_instance_valid(top) and top.has_method("apply_model_adjustments"):
+			top.apply_model_adjustments()
+
+
 # Syncs colour pickers to current live values when console opens.
 func _refresh_pickers() -> void:
 	# Bowl colour
@@ -264,6 +356,12 @@ func _refresh_pickers() -> void:
 	# Wall colour — read from the shared seg_mat emission
 	if GameSettings.wall_mat:
 		_wall_picker.color = GameSettings.wall_mat.emission
+
+	# Model scale / offset
+	if _model_scale_spin:
+		_model_scale_spin.value = GameSettings.model_import_scale
+	if _model_y_offset_spin:
+		_model_y_offset_spin.value = GameSettings.model_y_offset
 
 	# Sync checkboxes in case sound_enabled was changed externally
 	for key in _sound_checks:

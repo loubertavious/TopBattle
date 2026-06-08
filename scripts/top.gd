@@ -207,13 +207,12 @@ var _ring_col:  CollisionShape3D   # energy ring outer cylinder
 var _track_col: CollisionShape3D   # track body inner drum
 var _clash_cooldowns: Dictionary = {}
 var _spin_label:      Label3D
-var _collision_parts: Array[MeshInstance3D] = []
-var _flash_mats: Array[StandardMaterial3D] = []
-
-# ── Trail ──────────────────────────────────────────────────────────────────────
-var _trail_particles: GPUParticles3D
-var _trail_mesh_mat:  StandardMaterial3D   # controls emission colour / energy
-var _trail_proc_mat:  ParticleProcessMaterial
+var _collision_parts:      Array[MeshInstance3D] = []
+var _flash_mats:           Array[StandardMaterial3D] = []
+var _part_models:          Array[Node3D] = []   # model roots loaded via _try_load_part_model
+var _has_blade_model:      bool = false   # true when blade_*.glb loaded — hides rotation marker
+var _has_energy_ring_model: bool = false  # true when energy_ring_*.glb loaded
+var _has_tip_model:        bool = false   # true when tip_*.glb loaded
 
 # ── Audio ──────────────────────────────────────────────────────────────────────
 var _clash_player: AudioStreamPlayer3D   # top-vs-top hit
@@ -229,6 +228,22 @@ static var _s_clash_body:  Array = []   # track body / inner drum hit
 static var _s_wall_blade: Array = []    # blade or side hitting the bowl wall
 static var _s_wall_tip:   Array = []    # tip scraping the bowl floor
 static var _s_sounds_loaded: bool = false
+
+# ── Particle-effect pools (static — built once, shared by both tops) ────────────
+# Each entry is either a PackedScene (loaded from res://assets/particles/*.tscn)
+# or a Dictionary of parameters used to build a GPUParticles3D at spawn time.
+# File naming convention mirrors the sound pools:
+#   clash_blade_*  → blade / disc strike (default clash fallback)
+#   clash_ring_*   → energy ring hit
+#   clash_body_*   → inner track body hit
+#   wall_blade_*   → blade or side hits the bowl wall
+#   wall_tip_*     → tip scrapes the bowl floor
+static var _fx_clash_blade: Array = []
+static var _fx_clash_ring:  Array = []
+static var _fx_clash_body:  Array = []
+static var _fx_wall_blade:  Array = []
+static var _fx_wall_tip:    Array = []
+static var _fx_loaded: bool = false
 
 const LOW_SPIN_GRACE := 0.6
 
@@ -246,7 +261,6 @@ func _tip() -> TipData:
 
 func _ready() -> void:
 	_build_mesh()
-	_build_trail()
 
 	var bd := _blade()
 	var tr := _track()
@@ -280,6 +294,10 @@ func _ready() -> void:
 	if not _s_sounds_loaded:
 		_s_sounds_loaded = true
 		_load_sounds()
+
+	if not _fx_loaded:
+		_fx_loaded = true
+		_load_particle_effects()
 
 
 static func _load_sounds() -> void:
@@ -375,62 +393,99 @@ static func _synth_metal(base_hz: float, ratios: Array,
 	return wav
 
 
-func _build_trail() -> void:
-	# Particles are emitted in world space (local_coords = false) so they stay
-	# at the position they were born while the top moves away — giving a natural
-	# trailing ribbon without any additional position tracking.
-	_trail_particles = GPUParticles3D.new()
-	_trail_particles.emitting      = false
-	_trail_particles.amount        = 32
-	_trail_particles.lifetime      = 0.45
-	_trail_particles.explosiveness = 0.0   # continuous stream
-	_trail_particles.randomness    = 0.0
-	_trail_particles.local_coords  = false  # world-space → forms the trail
-	_trail_particles.fixed_fps     = 0      # interpolate smoothly
+# ── Particle effect loading ────────────────────────────────────────────────────
 
-	# Process material — no velocity, no gravity; particles just hang in space.
-	var proc := ParticleProcessMaterial.new()
-	proc.direction           = Vector3.ZERO
-	proc.spread              = 4.0
-	proc.gravity             = Vector3.ZERO
-	proc.initial_velocity_min = 0.0
-	proc.initial_velocity_max = 0.02
+static func _load_particle_effects() -> void:
+	# Scans res://assets/particles/ for .tscn files and routes them into pools
+	# by the same prefix convention used for sounds.  Any pool still empty after
+	# scanning is filled by _generate_placeholder_effects().
+	var dir := DirAccess.open("res://assets/particles/")
+	if dir:
+		dir.list_dir_begin()
+		var fname := dir.get_next()
+		while fname != "":
+			if not dir.current_is_dir() and fname.to_lower().ends_with(".tscn"):
+				var scene := load("res://assets/particles/" + fname) as PackedScene
+				if scene:
+					var lower := fname.to_lower()
+					if   lower.begins_with("clash_ring"):  _fx_clash_ring.append(scene)
+					elif lower.begins_with("clash_body"):  _fx_clash_body.append(scene)
+					elif lower.begins_with("clash"):       _fx_clash_blade.append(scene)
+					elif lower.begins_with("wall_tip"):    _fx_wall_tip.append(scene)
+					elif lower.begins_with("wall"):        _fx_wall_blade.append(scene)
+			fname = dir.get_next()
+	_generate_placeholder_effects()
 
-	# Alpha fades from opaque at birth to transparent at death.
-	var grad := Gradient.new()
-	grad.set_color(0, Color(top_color.r, top_color.g, top_color.b, 0.90))
-	grad.set_color(1, Color(top_color.r, top_color.g, top_color.b, 0.00))
-	var grad_tex := GradientTexture1D.new()
-	grad_tex.gradient = grad
-	proc.color_ramp = grad_tex
 
-	proc.scale_min = 0.07
-	proc.scale_max = 0.11
-	_trail_proc_mat = proc
-	_trail_particles.process_material = proc
+# Fills any pool still empty with a procedurally constructed particle config.
+# Real scene files take priority; these are the no-asset fallbacks.
+static func _generate_placeholder_effects() -> void:
+	# Each Dictionary describes a one-shot GPUParticles3D burst:
+	#   amount       — particle count (scaled down at low intensity)
+	#   lifetime     — seconds before each particle fades
+	#   vel_min/max  — launch speed range (scaled by intensity)
+	#   spread       — cone half-angle in degrees (0 = pencil beam, 180 = sphere)
+	#   gravity      — world-space acceleration on particles
+	#   scale_min/max— mesh-size multipliers  (1.0 = mesh radius as defined)
+	#   color_start  — RGBA at birth  (vertex color → albedo + alpha)
+	#   color_end    — RGBA at death
+	#   emission_mult— StandardMaterial3D emission_energy_multiplier
+	#   mesh_radius  — sphere mesh radius in metres
 
-	# Low-poly sphere per particle — unshaded so the colour is always vivid.
-	var sphere := SphereMesh.new()
-	sphere.radius          = 0.065
-	sphere.height          = 0.13
-	sphere.radial_segments = 4
-	sphere.rings           = 2
+	if _fx_clash_blade.is_empty():   # metallic orange sparks, tight outward cone
+		_fx_clash_blade.append({
+			"amount": 20, "lifetime": 0.40,
+			"vel_min": 2.0, "vel_max": 5.0, "spread": 50.0,
+			"gravity": Vector3(0.0, -5.0, 0.0),
+			"scale_min": 0.5, "scale_max": 1.3,
+			"color_start": Color(1.00, 0.65, 0.12, 1.0),
+			"color_end":   Color(0.85, 0.25, 0.02, 0.0),
+			"emission_mult": 6.0, "mesh_radius": 0.022,
+		})
 
-	var mesh_mat := StandardMaterial3D.new()
-	mesh_mat.shading_mode              = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mesh_mat.vertex_color_use_as_albedo = true   # particle colour ramp drives albedo + alpha
-	mesh_mat.albedo_color              = top_color
-	mesh_mat.emission_enabled          = true
-	mesh_mat.emission                  = top_color
-	mesh_mat.emission_energy_multiplier = 3.0
-	mesh_mat.transparency              = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_trail_mesh_mat = mesh_mat
-	sphere.surface_set_material(0, mesh_mat)
+	if _fx_clash_ring.is_empty():    # cyan energy sparks, wider spread
+		_fx_clash_ring.append({
+			"amount": 16, "lifetime": 0.50,
+			"vel_min": 1.5, "vel_max": 4.0, "spread": 75.0,
+			"gravity": Vector3(0.0, -3.0, 0.0),
+			"scale_min": 0.4, "scale_max": 1.1,
+			"color_start": Color(0.35, 0.90, 1.00, 1.0),
+			"color_end":   Color(0.10, 0.45, 0.85, 0.0),
+			"emission_mult": 7.0, "mesh_radius": 0.028,
+		})
 
-	_trail_particles.draw_pass_1 = sphere
-	# Emit from just above the tip so sparks don't clip through the floor.
-	_trail_particles.position = Vector3(0.0, _tip().tip_y + 0.06, 0.0)
-	add_child(_trail_particles)
+	if _fx_clash_body.is_empty():    # dull grey dust puff, wide spread, slow
+		_fx_clash_body.append({
+			"amount": 12, "lifetime": 0.32,
+			"vel_min": 0.6, "vel_max": 2.2, "spread": 110.0,
+			"gravity": Vector3(0.0, -2.5, 0.0),
+			"scale_min": 0.7, "scale_max": 1.5,
+			"color_start": Color(0.55, 0.53, 0.50, 0.95),
+			"color_end":   Color(0.28, 0.27, 0.25, 0.00),
+			"emission_mult": 1.8, "mesh_radius": 0.038,
+		})
+
+	if _fx_wall_blade.is_empty():    # bright silver sparks away from wall
+		_fx_wall_blade.append({
+			"amount": 16, "lifetime": 0.35,
+			"vel_min": 1.8, "vel_max": 4.2, "spread": 60.0,
+			"gravity": Vector3(0.0, -6.0, 0.0),
+			"scale_min": 0.4, "scale_max": 1.0,
+			"color_start": Color(0.95, 0.92, 0.88, 1.0),
+			"color_end":   Color(0.60, 0.58, 0.54, 0.0),
+			"emission_mult": 4.0, "mesh_radius": 0.020,
+		})
+
+	if _fx_wall_tip.is_empty():      # tiny floor-dust scrape, low hemisphere
+		_fx_wall_tip.append({
+			"amount": 8, "lifetime": 0.22,
+			"vel_min": 0.4, "vel_max": 1.4, "spread": 85.0,
+			"gravity": Vector3(0.0, -1.5, 0.0),
+			"scale_min": 0.5, "scale_max": 1.1,
+			"color_start": Color(0.62, 0.60, 0.56, 0.85),
+			"color_end":   Color(0.38, 0.36, 0.34, 0.00),
+			"emission_mult": 1.2, "mesh_radius": 0.032,
+		})
 
 
 func start_spinning() -> void:
@@ -441,8 +496,6 @@ func start_spinning() -> void:
 	rotation         = Vector3.ZERO
 	linear_velocity  = Vector3.ZERO
 	angular_velocity = Vector3.UP * initial_spin
-	if _trail_particles:
-		_trail_particles.emitting = true
 
 
 func _physics_process(delta: float) -> void:
@@ -533,7 +586,6 @@ func _handle_input() -> void:
 			angular_velocity += basis.y * minf(tr.boost_amount * _boost_charge, deficit)
 		_boost_cooldown = tr.boost_cooldown
 		_boost_charge   = maxf(0.1, _boost_charge - 0.28)
-		_flash_trail_boost()
 
 
 func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, local_shape_index: int) -> void:
@@ -553,7 +605,6 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 			(global_position.z + other.global_position.z) * 0.5
 		)
 		var clash_dir := (global_position - other.global_position).normalized()
-		_spawn_clash_sparks(contact_pos, clash_dir, rel_speed)
 		_flash_collision()
 
 		var owner_id  := shape_find_owner(local_shape_index)
@@ -561,13 +612,11 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 		var hit_ring  := (_ring_col  != null and hit_node == _ring_col)
 		var hit_track := (_track_col != null and hit_node == _track_col)
 
-		# Play the sound that matches the part that was struck on this top.
-		if hit_ring:
-			_play_clash_sound(rel_speed, "ring")
-		elif hit_track:
-			_play_clash_sound(rel_speed, "body")
-		else:
-			_play_clash_sound(rel_speed, "blade")
+		# Determine contact sub-type, then fire sound + particle effect together.
+		var contact := "ring" if hit_ring else ("body" if hit_track else "blade")
+		var intensity := clampf(rel_speed / 7.0, 0.0, 1.0)
+		_play_clash_sound(rel_speed, contact)
+		_spawn_contact_effect(contact_pos, clash_dir, "clash_" + contact, intensity)
 
 		var bd  := _blade()
 		var tr  := _track()
@@ -592,8 +641,10 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 		var hit_dir     := linear_velocity.normalized()
 		var contact_pos := global_position + hit_dir * _blade().disc_radius
 		contact_pos.y   = global_position.y + 0.11
-		_spawn_wall_sparks(contact_pos, -hit_dir, speed)
+		var wall_key    := "wall_tip" if tip_touching else "wall_blade"
+		var wall_intensity := clampf(speed / 5.0, 0.0, 1.0)
 		_play_wall_sound(speed, tip_touching)
+		_spawn_contact_effect(contact_pos, -hit_dir, wall_key, wall_intensity)
 
 
 func _flash_collision() -> void:
@@ -657,100 +708,95 @@ func _play_wall_sound(speed: float, is_tip: bool) -> void:
 	_wall_player.play()
 
 
-func _spawn_clash_sparks(pos: Vector3, dir: Vector3, _intensity: float) -> void:
-	var count   := 3
-	var colours := [
-		Color(1.0, 0.486, 0.2, 1.0),
-		Color(1.0, 0.4,  0.1),
-		Color(0.806, 0.019, 0.0, 1.0),
-	]
-	for i in range(count):
-		var sides := randi_range(3, 4)
-		var size  := randf_range(0.008, 0.07)
-		var mat := StandardMaterial3D.new()
-		mat.transparency             = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color             = colours[i % colours.size()]
-		mat.emission_enabled         = true
-		mat.emission                 = mat.albedo_color
-		mat.emission_energy_multiplier = 2.5
-		mat.shading_mode             = BaseMaterial3D.SHADING_MODE_UNSHADED
-		var chip_mesh := CylinderMesh.new()
-		chip_mesh.top_radius      = size
-		chip_mesh.bottom_radius   = size
-		chip_mesh.height          = 0.01
-		chip_mesh.radial_segments = sides
-		chip_mesh.cap_top         = true
-		chip_mesh.cap_bottom      = false
-		chip_mesh.material        = mat
-		var chip := MeshInstance3D.new()
-		chip.mesh = chip_mesh
-		get_parent().add_child(chip)
-		chip.global_position = pos
-		var spread_angle := randf_range(0.0, TAU)
-		var spread_tilt  := randf_range(0.1, 0.55)
-		var fly_dir := dir.rotated(Vector3.UP, spread_angle)
-		fly_dir = fly_dir.lerp(Vector3.UP, spread_tilt).normalized()
-		var speed   := randf_range(0.5, 1.0)
-		var travel  := fly_dir * speed * 0.35
-		var spin_axis := Vector3(randf(), randf(), randf()).normalized()
-		var duration := randf_range(0.25, 0.40)
-		var tween    := chip.create_tween()
-		tween.set_parallel(true)
-		tween.tween_property(chip, "global_position", pos + travel, duration)\
-			.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-		tween.tween_property(chip, "rotation", spin_axis * randf_range(TAU, TAU * 2.0), duration)
-		tween.tween_property(mat, "albedo_color",
-			Color(mat.albedo_color.r, mat.albedo_color.g, mat.albedo_color.b, 0.0),
-			duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tween.chain().tween_callback(chip.queue_free)
+# Spawns a one-shot particle burst at the contact point.
+# contact_key matches the pool names: clash_blade / clash_ring / clash_body /
+# wall_blade / wall_tip.  intensity is 0–1 (scales count and velocity).
+func _spawn_contact_effect(pos: Vector3, dir: Vector3, contact_key: String, intensity: float) -> void:
+	# Select pool, falling back to clash_blade if the specific one is empty.
+	var pool: Array
+	match contact_key:
+		"clash_ring":  pool = _fx_clash_ring  if not _fx_clash_ring.is_empty()  else _fx_clash_blade
+		"clash_body":  pool = _fx_clash_body  if not _fx_clash_body.is_empty()  else _fx_clash_blade
+		"wall_blade":  pool = _fx_wall_blade  if not _fx_wall_blade.is_empty()  else _fx_clash_blade
+		"wall_tip":    pool = _fx_wall_tip    if not _fx_wall_tip.is_empty()    else _fx_wall_blade
+		_:             pool = _fx_clash_blade
+	if pool.is_empty():
+		return
+
+	var entry = pool[randi() % pool.size()]
+	var fx: GPUParticles3D
+
+	if entry is PackedScene:
+		fx = entry.instantiate() as GPUParticles3D
+		if fx == null:
+			return
+	else:
+		fx = _build_one_shot_fx(entry, intensity)
+
+	# Rotate the emitter so its local +Y axis points along the impact direction.
+	# proc.direction = (0,1,0) in local space, so this steers the emission cone.
+	var emit_up := dir.normalized() if dir.length_squared() > 0.01 else Vector3.UP
+	if emit_up != Vector3.UP and emit_up != -Vector3.UP:
+		fx.quaternion = Quaternion(Vector3.UP, emit_up)
+	elif emit_up == -Vector3.UP:
+		fx.rotate_z(PI)
+
+	get_parent().add_child(fx)
+	fx.global_position = pos
+	fx.finished.connect(fx.queue_free)
+	fx.restart()   # ensure emission starts even if the scene had emitting=false
 
 
-func _spawn_wall_sparks(pos: Vector3, dir: Vector3, speed: float) -> void:
-	var count := clampi(int(speed * 0.4), 2, 5)
-	var colours := [
-		Color(0.85, 0.85, 0.90),
-		Color(0.70, 0.72, 0.78),
-		Color(1.00, 0.95, 0.70),
-	]
-	for i in range(count):
-		var sides := randi_range(3, 5)
-		var size  := randf_range(0.005, 0.05)
-		var mat := StandardMaterial3D.new()
-		mat.transparency             = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color             = colours[i % colours.size()]
-		mat.emission_enabled         = true
-		mat.emission                 = mat.albedo_color
-		mat.emission_energy_multiplier = 3.0
-		mat.shading_mode             = BaseMaterial3D.SHADING_MODE_UNSHADED
-		var chip_mesh := CylinderMesh.new()
-		chip_mesh.top_radius      = size
-		chip_mesh.bottom_radius   = size
-		chip_mesh.height          = 0.01
-		chip_mesh.radial_segments = sides
-		chip_mesh.cap_top         = true
-		chip_mesh.cap_bottom      = false
-		chip_mesh.material        = mat
-		var chip := MeshInstance3D.new()
-		chip.mesh = chip_mesh
-		get_parent().add_child(chip)
-		chip.global_position = pos
-		var spread_angle := randf_range(0.0, TAU)
-		var spread_tilt  := randf_range(0.05, 0.35)
-		var fly_dir := dir.rotated(Vector3.UP, spread_angle)
-		fly_dir = fly_dir.lerp(Vector3.UP, spread_tilt).normalized()
-		var chip_speed := randf_range(0.3, 0.8) * clampf(speed / 8.0, 0.5, 1.5)
-		var travel     := fly_dir * chip_speed * 0.3
-		var spin_axis := Vector3(randf(), randf(), randf()).normalized()
-		var duration  := randf_range(0.15, 0.30)
-		var tween     := chip.create_tween()
-		tween.set_parallel(true)
-		tween.tween_property(chip, "global_position", pos + travel, duration)\
-			.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-		tween.tween_property(chip, "rotation", spin_axis * randf_range(TAU, TAU * 2.0), duration)
-		tween.tween_property(mat, "albedo_color",
-			Color(mat.albedo_color.r, mat.albedo_color.g, mat.albedo_color.b, 0.0),
-			duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		tween.chain().tween_callback(chip.queue_free)
+# Builds a fresh one-shot GPUParticles3D from a Dictionary config.
+# Called per-impact, so each burst has its own independent material.
+func _build_one_shot_fx(params: Dictionary, intensity: float) -> GPUParticles3D:
+	var fx := GPUParticles3D.new()
+	fx.one_shot       = true
+	fx.emitting       = false   # restart() called after add_child
+	fx.explosiveness  = 0.92    # nearly all particles at once
+	fx.randomness     = 0.25
+	fx.local_coords   = true    # one-shot at fixed point — local is fine
+	fx.amount         = maxi(3, int(params.get("amount", 12) * clampf(intensity, 0.30, 1.0)))
+	fx.lifetime       = params.get("lifetime", 0.35)
+
+	var proc := ParticleProcessMaterial.new()
+	proc.direction            = Vector3(0.0, 1.0, 0.0)   # +Y = forward; node is rotated to impact dir
+	proc.spread               = params.get("spread", 60.0)
+	proc.gravity              = params.get("gravity", Vector3(0.0, -5.0, 0.0))
+	proc.initial_velocity_min = params.get("vel_min", 1.0) * clampf(intensity, 0.40, 1.0)
+	proc.initial_velocity_max = params.get("vel_max", 3.0) * clampf(intensity, 0.40, 1.0)
+	proc.scale_min            = params.get("scale_min", 0.5)
+	proc.scale_max            = params.get("scale_max", 1.0)
+
+	var c0: Color = params.get("color_start", Color.WHITE)
+	var c1: Color = params.get("color_end",   Color.TRANSPARENT)
+	var grad := Gradient.new()
+	grad.set_color(0, c0)
+	grad.set_color(1, c1)
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	proc.color_ramp   = grad_tex
+	fx.process_material = proc
+
+	var r: float = params.get("mesh_radius", 0.025)
+	var sphere := SphereMesh.new()
+	sphere.radius          = r
+	sphere.height          = r * 2.0
+	sphere.radial_segments = 4
+	sphere.rings           = 2
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_color               = c0
+	mat.emission_enabled           = true
+	mat.emission                   = c0
+	mat.emission_energy_multiplier = params.get("emission_mult", 3.0)
+	mat.transparency               = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sphere.surface_set_material(0, mat)
+	fx.draw_pass_1 = sphere
+
+	return fx
 
 
 func _die() -> void:
@@ -760,28 +806,6 @@ func _die() -> void:
 	angular_damp = 3.0
 	linear_damp  = 0.3
 	top_died.emit(player_id)
-	# Stop spawning new trail particles; already-live ones fade out naturally.
-	if _trail_particles:
-		_trail_particles.emitting = false
-
-
-func _flash_trail_boost() -> void:
-	if _trail_mesh_mat == null:
-		return
-	# Ramp emission up to a bright flare then settle back to idle level.
-	var tween := create_tween()
-	tween.tween_property(_trail_mesh_mat, "emission_energy_multiplier", 10.0, 0.07)\
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tween.tween_property(_trail_mesh_mat, "emission_energy_multiplier", 3.0,  0.50)\
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	# Also briefly widen particles so the burst reads as an explosion of sparks.
-	if _trail_proc_mat:
-		var t2 := create_tween().set_parallel(true)
-		t2.tween_property(_trail_proc_mat, "scale_min", 0.16, 0.07)
-		t2.tween_property(_trail_proc_mat, "scale_max", 0.24, 0.07)
-		t2.chain().set_parallel(true)
-		t2.tween_property(_trail_proc_mat, "scale_min", 0.07, 0.45)
-		t2.tween_property(_trail_proc_mat, "scale_max", 0.11, 0.45)
 
 
 func _update_label() -> void:
@@ -801,8 +825,82 @@ func _build_mesh() -> void:
 	_build_collision()
 
 
+# ── Model loading ─────────────────────────────────────────────────────────────
+# Drop a .glb into res://assets/models/ to replace any part's procedural mesh.
+# Collision shapes are ALWAYS built from part data — only the visual swaps.
+#
+# Naming convention (part_name is the display_name lowercased):
+#   blade_attack.glb         blade_defense.glb         blade_stamina.glb
+#   energy_ring_attack.glb   energy_ring_defense.glb   energy_ring_stamina.glb
+#   tip_attack.glb           tip_defense.glb           tip_stamina.glb
+#
+# When a GLB is present for a part, the procedural mesh for that part is not built.
+# The rotation marker stripe is also hidden when a blade model is loaded.
+#
+# Model dimensions should match the collision data so the mesh sits inside its
+# physics shape.  Reference values (all in metres, Y = up):
+#   Blade  — disc up to blade_radius (0.45 m), centred at y ≈ 0.11, height ≈ 0.14
+#   Track  — ring at ring_y (−0.02), ring_radius 0.18–0.39, height 0.20
+#   Tip    — sphere at tip_y (−0.22 to −0.23), radius 0.07–0.10
+#
+# Player colour:
+#   In your 3D tool, name any material exactly "TopColor" (case-insensitive).
+#   That surface is replaced at runtime with the player's chosen colour while
+#   every other material is left exactly as you authored it.
+
+# Returns true and adds the model if a matching .glb exists; false otherwise.
+func _try_load_part_model(part_type: String, part_name: String) -> bool:
+	var path := "res://assets/models/%s_%s.glb" % [part_type, part_name]
+	if not ResourceLoader.exists(path):
+		return false
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return false
+	var inst := packed.instantiate()
+	inst.scale      = Vector3.ONE * GameSettings.model_import_scale
+	inst.position.y = GameSettings.model_y_offset
+	_apply_top_color_to_model(inst)
+	add_child(inst)
+	_part_models.append(inst)   # tracked for live dev-console adjustment
+	return true
+
+
+# Called by the dev console to apply scale/offset changes live without respawning.
+func apply_model_adjustments() -> void:
+	for model in _part_models:
+		if is_instance_valid(model):
+			model.scale      = Vector3.ONE * GameSettings.model_import_scale
+			model.position.y = GameSettings.model_y_offset
+
+
+# Recursively walks a model and replaces any surface whose material resource_name
+# matches "topcolor" with a fresh StandardMaterial3D using the player's top_color.
+# All other surfaces keep their authored materials.
+func _apply_top_color_to_model(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null:
+			for i in range(mi.mesh.get_surface_count()):
+				var surf_mat := mi.mesh.surface_get_material(i)
+				if surf_mat != null and surf_mat.resource_name.to_lower() == "topcolor":
+					var tinted := StandardMaterial3D.new()
+					tinted.albedo_color               = top_color
+					tinted.metallic                   = 0.85
+					tinted.roughness                  = 0.18
+					tinted.emission_enabled           = true
+					tinted.emission                   = top_color
+					tinted.emission_energy_multiplier = 1.7
+					mi.set_surface_override_material(i, tinted)
+					_flash_mats.append(tinted)   # participates in hit flash
+	for child in node.get_children():
+		_apply_top_color_to_model(child)
+
+
 # ── Performance Tip (uses TipData) ────────────────────────────────────────────
 func _build_performance_tip() -> void:
+	if _try_load_part_model("tip", _tip().display_name.to_lower()):
+		_has_tip_model = true
+		return
 	var tp  := _tip()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color             = tp.tip_color
@@ -857,6 +955,9 @@ func _build_performance_tip() -> void:
 
 # ── Fusion Wheel (uses BladeData) ─────────────────────────────────────────────
 func _build_fusion_wheel() -> void:
+	if _try_load_part_model("blade", _blade().display_name.to_lower()):
+		_has_blade_model = true
+		return
 	var bd    := _blade()
 	var sides := bd.disc_sides
 
@@ -918,6 +1019,14 @@ func _build_fusion_wheel() -> void:
 
 # ── Energy Ring (uses TrackData) ──────────────────────────────────────────────
 func _build_energy_ring() -> void:
+	# energy_ring_*.glb and track_*.glb are independent slots — both are attempted
+	# so you can have separate models for the ring and the track body.
+	# Procedural is skipped only if at least one model loaded.
+	var ring_loaded  := _try_load_part_model("energy_ring", _track().display_name.to_lower())
+	var track_loaded := _try_load_part_model("track",        _track().display_name.to_lower())
+	if ring_loaded or track_loaded:
+		_has_energy_ring_model = true
+		return
 	var tr    := _track()
 	var sides := _blade().disc_sides
 
@@ -982,6 +1091,9 @@ func _build_energy_ring() -> void:
 
 # ── Rotation marker ────────────────────────────────────────────────────────────
 func _build_rotation_marker() -> void:
+	# Skip the stripe when a blade model is loaded — it provides its own visual identity.
+	if _has_blade_model:
+		return
 	var stripe_mat := StandardMaterial3D.new()
 	stripe_mat.albedo_color             = Color(0.089, 0.089, 0.089, 1.0)
 	stripe_mat.emission_enabled         = true

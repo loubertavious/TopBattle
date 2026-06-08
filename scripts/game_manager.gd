@@ -241,7 +241,7 @@ func _setup_environment() -> void:
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-20.0, -150.0, 0.0)
 	fill.light_energy = 0.35
-	fill.light_color = Color(0.435, 0.037, 0.086, 1.0)
+	fill.light_color = Color(0.35, 0.35, 0.40, 1.0)
 	add_child(fill)
 
 	var env_node := WorldEnvironment.new()
@@ -260,9 +260,9 @@ func _setup_environment() -> void:
 	else:
 		# Fallback if texture hasn't been imported yet
 		env.background_mode       = Environment.BG_COLOR
-		env.background_color      = Color(0.03, 0.02, 0.10)
+		env.background_color      = Color(0.04, 0.04, 0.05)
 		env.ambient_light_source  = Environment.AMBIENT_SOURCE_COLOR
-		env.ambient_light_color   = Color(0.06, 0.03, 0.18)
+		env.ambient_light_color   = Color(0.12, 0.12, 0.14)
 		env.ambient_light_energy  = 0.6
 
 	env.glow_enabled   = true
@@ -294,7 +294,7 @@ func _build_stadium_classic() -> void:
 shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back;
 
-uniform vec4      base_color    : source_color = vec4(0.45, 0.03, 0.04, 1.0);
+uniform vec4      base_color    : source_color = vec4(0.08, 0.08, 0.10, 1.0);
 uniform sampler2D floor_texture : source_color, hint_default_white;
 uniform bool      has_texture   = false;
 uniform float     texture_scale : hint_range(0.1, 8.0, 0.1) = 2.0;
@@ -618,6 +618,7 @@ func _spawn_tops() -> void:
 	for top in _tops:
 		top.queue_free()
 	_tops.clear()
+	GameSettings.live_tops.clear()
 
 	var t1 := RigidBody3D.new()
 	t1.set_script(TopScript)
@@ -633,6 +634,7 @@ func _spawn_tops() -> void:
 	t1.connect("top_died", _on_top_died)
 	add_child(t1)
 	_tops.append(t1)
+	GameSettings.live_tops.append(t1)
 
 	var t2 := RigidBody3D.new()
 	t2.set_script(TopScript)
@@ -647,6 +649,7 @@ func _spawn_tops() -> void:
 	t2.connect("top_died", _on_top_died)
 	add_child(t2)
 	_tops.append(t2)
+	GameSettings.live_tops.append(t2)
 
 
 # ── Bot AI ─────────────────────────────────────────────────────────────────────
@@ -754,9 +757,9 @@ func _build_segmented_rim(rim_y: float) -> void:
 	torus_mesh.rings         = 64
 	torus_mesh.ring_segments = 10
 	var torus_mat := StandardMaterial3D.new()
-	torus_mat.albedo_color               = Color(0.44, 0.28, 0.29)
+	torus_mat.albedo_color               = Color(0.18, 0.18, 0.20)
 	torus_mat.emission_enabled           = true
-	torus_mat.emission                   = Color(0.97, 0.62, 0.65)
+	torus_mat.emission                   = Color(0.65, 0.65, 0.70)
 	torus_mat.emission_energy_multiplier = 3.0
 	torus_mat.metallic                   = 0.7
 	torus_mat.roughness                  = 0.15
@@ -769,7 +772,7 @@ func _build_segmented_rim(rim_y: float) -> void:
 	# Ambient glow from the rim plane.
 	var ring_light := OmniLight3D.new()
 	ring_light.light_energy = 1.2
-	ring_light.light_color  = Color(0.97, 0.62, 0.65)
+	ring_light.light_color  = Color(0.65, 0.65, 0.70)
 	ring_light.omni_range   = 16.0
 	ring_light.position     = Vector3(0.0, rim_y, 0.0)
 	add_child(ring_light)
@@ -778,9 +781,9 @@ func _build_segmented_rim(rim_y: float) -> void:
 	# Shared material — CULL_DISABLED so both sides of each arc face render
 	# without needing to verify per-face winding order.
 	var seg_mat := StandardMaterial3D.new()
-	seg_mat.albedo_color               = Color(0.20, 0.01, 0.02)
+	seg_mat.albedo_color               = Color(0.10, 0.10, 0.12)
 	seg_mat.emission_enabled           = true
-	seg_mat.emission                   = Color(0.45, 0.03, 0.04)
+	seg_mat.emission                   = Color(0.28, 0.28, 0.32)
 	seg_mat.emission_energy_multiplier = 2.2
 	seg_mat.metallic                   = 0.80
 	seg_mat.roughness                  = 0.18

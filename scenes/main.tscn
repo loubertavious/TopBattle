@@ -4,3 +4,7 @@
 
 [node name="Main" type="Node3D" unique_id=1117417428]
 script = ExtResource("1")
+
+[node name="Node3D" type="Node3D" parent="." unique_id=701616985]
+
+[node name="GPUParticles3D" type="GPUParticles3D" parent="Node3D" unique_id=2107365854]
