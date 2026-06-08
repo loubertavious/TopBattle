@@ -5,13 +5,19 @@ var vs_bot: bool = false
 
 # ── Dev-console live state ──────────────────────────────────────────────────────
 
-# Which sound pools are active. wall_tip is off by default (very frequent, subtle).
+# Master volume: linear 0.0–1.0 mapped to AudioServer master bus.
+var master_volume: float = 1.0
+# Per-category dB offsets applied on top of the speed-scaled volume.
+var clash_volume_db: float = 0.0   # top-vs-top hits
+var wall_volume_db:  float = 0.0   # bowl / wall hits
+
+# Which sound pools are active. Tip_Wall is off by default (very frequent, subtle).
 var sound_enabled: Dictionary = {
-	"clash_blade": true,
-	"clash_ring":  true,
-	"clash_body":  true,
-	"wall_blade":  true,
-	"wall_tip":    false,
+	"Blade_Blade": true,
+	"Blade_Ring":  true,
+	"Blade_Track": true,
+	"Blade_Wall":  true,
+	"Tip_Wall":    false,
 }
 
 # Scale applied to all loaded .glb part models.

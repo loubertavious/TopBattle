@@ -220,29 +220,29 @@ var _wall_player:  AudioStreamPlayer3D   # bowl/wall hit
 
 # ── Sound pools (static — loaded once, shared by both tops) ────────────────────
 # Top-vs-top contact pools (fall back left-to-right when empty):
-#   clash_blade → clash_ring / clash_body → clash_blade
-static var _s_clash_blade: Array = []   # outer disc / default clash
-static var _s_clash_ring:  Array = []   # energy ring hit
-static var _s_clash_body:  Array = []   # track body / inner drum hit
+#   Blade_Blade → Blade_Ring / Blade_Track → Blade_Blade
+static var _s_blade_blade: Array = []   # outer disc vs outer disc (default clash)
+static var _s_blade_ring:  Array = []   # outer disc vs energy ring
+static var _s_blade_track: Array = []   # outer disc vs track body
 # Bowl / wall contact pools:
-static var _s_wall_blade: Array = []    # blade or side hitting the bowl wall
-static var _s_wall_tip:   Array = []    # tip scraping the bowl floor
+static var _s_blade_wall: Array = []    # blade or side hitting the bowl wall
+static var _s_tip_wall:   Array = []    # tip scraping the bowl floor
 static var _s_sounds_loaded: bool = false
 
 # ── Particle-effect pools (static — built once, shared by both tops) ────────────
 # Each entry is either a PackedScene (loaded from res://assets/particles/*.tscn)
 # or a Dictionary of parameters used to build a GPUParticles3D at spawn time.
-# File naming convention mirrors the sound pools:
-#   clash_blade_*  → blade / disc strike (default clash fallback)
-#   clash_ring_*   → energy ring hit
-#   clash_body_*   → inner track body hit
-#   wall_blade_*   → blade or side hits the bowl wall
-#   wall_tip_*     → tip scrapes the bowl floor
-static var _fx_clash_blade: Array = []
-static var _fx_clash_ring:  Array = []
-static var _fx_clash_body:  Array = []
-static var _fx_wall_blade:  Array = []
-static var _fx_wall_tip:    Array = []
+# Folder names under assets/particles/ mirror the pool names:
+#   Blade_Blade/  → blade / disc strike (default clash fallback)
+#   Blade_Ring/   → energy ring hit
+#   Blade_Track/  → inner track body hit
+#   Blade_Wall/   → blade or side hits the bowl wall
+#   Tip_Wall/     → tip scrapes the bowl floor
+static var _fx_blade_blade: Array = []
+static var _fx_blade_ring:  Array = []
+static var _fx_blade_track: Array = []
+static var _fx_blade_wall:  Array = []
+static var _fx_tip_wall:    Array = []
 static var _fx_loaded: bool = false
 
 const LOW_SPIN_GRACE := 0.6
@@ -301,33 +301,38 @@ func _ready() -> void:
 
 
 static func _load_sounds() -> void:
-	# Scans res://assets/sounds/ and routes each file into a pool by prefix:
+	# Each pool maps to a subfolder under res://assets/sounds/.
+	# Drop any .wav / .ogg / .mp3 into the matching folder — no filename convention needed.
+	# A random file from the folder is chosen every time that sound is triggered.
 	#
-	#   clash_blade_*  → blade / disc contact (default clash fallback)
-	#   clash_ring_*   → energy ring hit
-	#   clash_body_*   → inner track body hit
-	#   wall_blade_*   → blade or side hits the bowl wall
-	#   wall_tip_*     → tip scrapes the bowl floor
-	#
-	# Any file beginning with just "clash" (no sub-type) goes into clash_blade.
-	# Any file beginning with just "wall"  (no sub-type) goes into wall_blade.
-	var dir := DirAccess.open("res://assets/sounds/")
-	if dir == null:
-		return
-	dir.list_dir_begin()
-	var fname := dir.get_next()
-	while fname != "":
-		if not dir.current_is_dir():
-			var lower := fname.to_lower()
-			if lower.ends_with(".wav") or lower.ends_with(".ogg") or lower.ends_with(".mp3"):
-				var stream := load("res://assets/sounds/" + fname) as AudioStream
-				if stream:
-					if   lower.begins_with("clash_ring"):  _s_clash_ring.append(stream)
-					elif lower.begins_with("clash_body"):  _s_clash_body.append(stream)
-					elif lower.begins_with("clash"):       _s_clash_blade.append(stream)
-					elif lower.begins_with("wall_tip"):    _s_wall_tip.append(stream)
-					elif lower.begins_with("wall"):        _s_wall_blade.append(stream)
-		fname = dir.get_next()
+	#   Blade_Blade/  → outer disc vs outer disc (fallback for all clash sounds)
+	#   Blade_Ring/   → outer disc hits energy ring (ringing, resonant metallic tone)
+	#   Blade_Track/  → outer disc hits track body (duller thud / clunk)
+	#   Blade_Wall/   → blade or side hits the bowl wall (sharp scrape / impact)
+	#   Tip_Wall/     → tip contacts the bowl floor (soft tick / scrape)
+	var pool_map: Dictionary = {
+		"Blade_Blade": _s_blade_blade,
+		"Blade_Ring":  _s_blade_ring,
+		"Blade_Track": _s_blade_track,
+		"Blade_Wall":  _s_blade_wall,
+		"Tip_Wall":    _s_tip_wall,
+	}
+	for folder_name in pool_map.keys():
+		var path: String = "res://assets/sounds/" + folder_name + "/"
+		var dir := DirAccess.open(path)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var fname := dir.get_next()
+		while fname != "":
+			if not dir.current_is_dir():
+				var lower := fname.to_lower()
+				if lower.ends_with(".wav") or lower.ends_with(".ogg") or lower.ends_with(".mp3"):
+					var stream := load(path + fname) as AudioStream
+					if stream:
+						pool_map[folder_name].append(stream)
+			fname = dir.get_next()
+		dir.list_dir_end()
 	# Fill any empty pool with a synthesised placeholder so the game always has audio.
 	_generate_placeholder_sounds()
 
@@ -336,16 +341,16 @@ static func _load_sounds() -> void:
 # Call after scanning — real files take priority, synth fills the gaps.
 static func _generate_placeholder_sounds() -> void:
 	# base_hz, partials (ratio × base), decay rate, duration (s)
-	if _s_clash_blade.is_empty():
-		_s_clash_blade.append(_synth_metal(900.0,  [1.0, 2.40, 4.10], 8.0,  0.35))
-	if _s_clash_ring.is_empty():
-		_s_clash_ring.append( _synth_metal(580.0,  [1.0, 2.76, 5.40], 4.0,  0.55))
-	if _s_clash_body.is_empty():
-		_s_clash_body.append( _synth_metal(270.0,  [1.0, 1.80],       16.0, 0.22))
-	if _s_wall_blade.is_empty():
-		_s_wall_blade.append( _synth_metal(1050.0, [1.0, 3.10],       11.0, 0.28))
-	if _s_wall_tip.is_empty():
-		_s_wall_tip.append(   _synth_metal(400.0,  [1.0, 1.55],       20.0, 0.14))
+	if _s_blade_blade.is_empty():
+		_s_blade_blade.append(_synth_metal(900.0,  [1.0, 2.40, 4.10], 8.0,  0.35))
+	if _s_blade_ring.is_empty():
+		_s_blade_ring.append( _synth_metal(580.0,  [1.0, 2.76, 5.40], 4.0,  0.55))
+	if _s_blade_track.is_empty():
+		_s_blade_track.append(_synth_metal(270.0,  [1.0, 1.80],       16.0, 0.22))
+	if _s_blade_wall.is_empty():
+		_s_blade_wall.append( _synth_metal(1050.0, [1.0, 3.10],       11.0, 0.28))
+	if _s_tip_wall.is_empty():
+		_s_tip_wall.append(   _synth_metal(400.0,  [1.0, 1.55],       20.0, 0.14))
 
 
 # Synthesises a single AudioStreamWAV from a set of decaying sinusoids.
@@ -396,24 +401,36 @@ static func _synth_metal(base_hz: float, ratios: Array,
 # ── Particle effect loading ────────────────────────────────────────────────────
 
 static func _load_particle_effects() -> void:
-	# Scans res://assets/particles/ for .tscn files and routes them into pools
-	# by the same prefix convention used for sounds.  Any pool still empty after
-	# scanning is filled by _generate_placeholder_effects().
-	var dir := DirAccess.open("res://assets/particles/")
-	if dir:
+	# Scans subfolders under res://assets/particles/ — one folder per pool.
+	# Drop any .tscn into the matching folder; no filename convention needed.
+	# Any pool still empty after scanning is filled by _generate_placeholder_effects().
+	#
+	#   Blade_Blade/  → disc vs disc clash sparks (default fallback)
+	#   Blade_Ring/   → energy ring hit sparks
+	#   Blade_Track/  → track body hit dust
+	#   Blade_Wall/   → blade hits bowl wall sparks
+	#   Tip_Wall/     → tip scrapes bowl floor dust
+	var fx_map: Dictionary = {
+		"Blade_Blade": _fx_blade_blade,
+		"Blade_Ring":  _fx_blade_ring,
+		"Blade_Track": _fx_blade_track,
+		"Blade_Wall":  _fx_blade_wall,
+		"Tip_Wall":    _fx_tip_wall,
+	}
+	for folder_name in fx_map.keys():
+		var path: String = "res://assets/particles/" + folder_name + "/"
+		var dir := DirAccess.open(path)
+		if dir == null:
+			continue
 		dir.list_dir_begin()
 		var fname := dir.get_next()
 		while fname != "":
 			if not dir.current_is_dir() and fname.to_lower().ends_with(".tscn"):
-				var scene := load("res://assets/particles/" + fname) as PackedScene
+				var scene := load(path + fname) as PackedScene
 				if scene:
-					var lower := fname.to_lower()
-					if   lower.begins_with("clash_ring"):  _fx_clash_ring.append(scene)
-					elif lower.begins_with("clash_body"):  _fx_clash_body.append(scene)
-					elif lower.begins_with("clash"):       _fx_clash_blade.append(scene)
-					elif lower.begins_with("wall_tip"):    _fx_wall_tip.append(scene)
-					elif lower.begins_with("wall"):        _fx_wall_blade.append(scene)
+					fx_map[folder_name].append(scene)
 			fname = dir.get_next()
+		dir.list_dir_end()
 	_generate_placeholder_effects()
 
 
@@ -432,8 +449,8 @@ static func _generate_placeholder_effects() -> void:
 	#   emission_mult— StandardMaterial3D emission_energy_multiplier
 	#   mesh_radius  — sphere mesh radius in metres
 
-	if _fx_clash_blade.is_empty():   # metallic orange sparks, tight outward cone
-		_fx_clash_blade.append({
+	if _fx_blade_blade.is_empty():   # metallic orange sparks, tight outward cone
+		_fx_blade_blade.append({
 			"amount": 20, "lifetime": 0.40,
 			"vel_min": 2.0, "vel_max": 5.0, "spread": 50.0,
 			"gravity": Vector3(0.0, -5.0, 0.0),
@@ -443,8 +460,8 @@ static func _generate_placeholder_effects() -> void:
 			"emission_mult": 6.0, "mesh_radius": 0.022,
 		})
 
-	if _fx_clash_ring.is_empty():    # cyan energy sparks, wider spread
-		_fx_clash_ring.append({
+	if _fx_blade_ring.is_empty():    # cyan energy sparks, wider spread
+		_fx_blade_ring.append({
 			"amount": 16, "lifetime": 0.50,
 			"vel_min": 1.5, "vel_max": 4.0, "spread": 75.0,
 			"gravity": Vector3(0.0, -3.0, 0.0),
@@ -454,8 +471,8 @@ static func _generate_placeholder_effects() -> void:
 			"emission_mult": 7.0, "mesh_radius": 0.028,
 		})
 
-	if _fx_clash_body.is_empty():    # dull grey dust puff, wide spread, slow
-		_fx_clash_body.append({
+	if _fx_blade_track.is_empty():   # dull grey dust puff, wide spread, slow
+		_fx_blade_track.append({
 			"amount": 12, "lifetime": 0.32,
 			"vel_min": 0.6, "vel_max": 2.2, "spread": 110.0,
 			"gravity": Vector3(0.0, -2.5, 0.0),
@@ -465,8 +482,8 @@ static func _generate_placeholder_effects() -> void:
 			"emission_mult": 1.8, "mesh_radius": 0.038,
 		})
 
-	if _fx_wall_blade.is_empty():    # bright silver sparks away from wall
-		_fx_wall_blade.append({
+	if _fx_blade_wall.is_empty():    # bright silver sparks away from wall
+		_fx_blade_wall.append({
 			"amount": 16, "lifetime": 0.35,
 			"vel_min": 1.8, "vel_max": 4.2, "spread": 60.0,
 			"gravity": Vector3(0.0, -6.0, 0.0),
@@ -476,8 +493,8 @@ static func _generate_placeholder_effects() -> void:
 			"emission_mult": 4.0, "mesh_radius": 0.020,
 		})
 
-	if _fx_wall_tip.is_empty():      # tiny floor-dust scrape, low hemisphere
-		_fx_wall_tip.append({
+	if _fx_tip_wall.is_empty():      # tiny floor-dust scrape, low hemisphere
+		_fx_tip_wall.append({
 			"amount": 8, "lifetime": 0.22,
 			"vel_min": 0.4, "vel_max": 1.4, "spread": 85.0,
 			"gravity": Vector3(0.0, -1.5, 0.0),
@@ -613,10 +630,10 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 		var hit_track := (_track_col != null and hit_node == _track_col)
 
 		# Determine contact sub-type, then fire sound + particle effect together.
-		var contact := "ring" if hit_ring else ("body" if hit_track else "blade")
+		var contact := "Blade_Ring" if hit_ring else ("Blade_Track" if hit_track else "Blade_Blade")
 		var intensity := clampf(rel_speed / 7.0, 0.0, 1.0)
 		_play_clash_sound(rel_speed, contact)
-		_spawn_contact_effect(contact_pos, clash_dir, "clash_" + contact, intensity)
+		_spawn_contact_effect(contact_pos, clash_dir, contact, intensity)
 
 		var bd  := _blade()
 		var tr  := _track()
@@ -641,7 +658,7 @@ func _on_body_shape_entered(body_rid: RID, body: Node, body_shape_index: int, lo
 		var hit_dir     := linear_velocity.normalized()
 		var contact_pos := global_position + hit_dir * _blade().disc_radius
 		contact_pos.y   = global_position.y + 0.11
-		var wall_key    := "wall_tip" if tip_touching else "wall_blade"
+		var wall_key    := "Tip_Wall" if tip_touching else "Blade_Wall"
 		var wall_intensity := clampf(speed / 5.0, 0.0, 1.0)
 		_play_wall_sound(speed, tip_touching)
 		_spawn_contact_effect(contact_pos, -hit_dir, wall_key, wall_intensity)
@@ -664,24 +681,19 @@ func _flash_collision() -> void:
 func _play_clash_sound(rel_speed: float, contact: String) -> void:
 	if _clash_player == null:
 		return
-	# Map contact type to pool key and check if it's enabled in the dev console.
-	var pool_key: String
-	match contact:
-		"ring":  pool_key = "clash_ring"
-		"body":  pool_key = "clash_body"
-		_:       pool_key = "clash_blade"
-	if not GameSettings.sound_enabled.get(pool_key, true):
+	# contact is already the pool key (Blade_Blade / Blade_Ring / Blade_Track).
+	if not GameSettings.sound_enabled.get(contact, true):
 		return
-	# Pick the pool, fall back to blade pool if specific pool is empty.
+	# Pick the pool, fall back to Blade_Blade if the specific pool is empty.
 	var pool: Array
 	match contact:
-		"ring":  pool = _s_clash_ring  if not _s_clash_ring.is_empty()  else _s_clash_blade
-		"body":  pool = _s_clash_body  if not _s_clash_body.is_empty()  else _s_clash_blade
-		_:       pool = _s_clash_blade
+		"Blade_Ring":  pool = _s_blade_ring  if not _s_blade_ring.is_empty()  else _s_blade_blade
+		"Blade_Track": pool = _s_blade_track if not _s_blade_track.is_empty() else _s_blade_blade
+		_:             pool = _s_blade_blade
 	if pool.is_empty():
 		return
 	_clash_player.stream      = pool[randi() % pool.size()]
-	_clash_player.volume_db   = lerpf(-10.0, 3.0, clampf(rel_speed / 7.0, 0.0, 1.0))
+	_clash_player.volume_db   = lerpf(-10.0, 3.0, clampf(rel_speed / 7.0, 0.0, 1.0)) + GameSettings.clash_volume_db
 	_clash_player.pitch_scale = randf_range(0.92, 1.08)
 	_clash_player.play()
 
@@ -690,36 +702,36 @@ func _play_wall_sound(speed: float, is_tip: bool) -> void:
 	if _wall_player == null:
 		return
 	# Check dev-console enable flag before playing.
-	var pool_key := "wall_tip" if is_tip else "wall_blade"
+	var pool_key := "Tip_Wall" if is_tip else "Blade_Wall"
 	if not GameSettings.sound_enabled.get(pool_key, true):
 		return
 	# Tip-on-floor: softer scrape. Blade-on-wall: sharp impact.
 	var pool: Array
 	if is_tip:
-		pool = _s_wall_tip   if not _s_wall_tip.is_empty()   else _s_wall_blade
+		pool = _s_tip_wall   if not _s_tip_wall.is_empty()   else _s_blade_wall
 	else:
-		pool = _s_wall_blade if not _s_wall_blade.is_empty() else _s_wall_tip
+		pool = _s_blade_wall if not _s_blade_wall.is_empty() else _s_tip_wall
 	if pool.is_empty():
 		return
 	var vol_range := Vector2(-18.0, -4.0) if is_tip else Vector2(-12.0, 1.0)
 	_wall_player.stream      = pool[randi() % pool.size()]
-	_wall_player.volume_db   = lerpf(vol_range.x, vol_range.y, clampf(speed / 5.0, 0.0, 1.0))
+	_wall_player.volume_db   = lerpf(vol_range.x, vol_range.y, clampf(speed / 5.0, 0.0, 1.0)) + GameSettings.wall_volume_db
 	_wall_player.pitch_scale = randf_range(0.90, 1.10)
 	_wall_player.play()
 
 
 # Spawns a one-shot particle burst at the contact point.
-# contact_key matches the pool names: clash_blade / clash_ring / clash_body /
-# wall_blade / wall_tip.  intensity is 0–1 (scales count and velocity).
+# contact_key matches the pool names: Blade_Blade / Blade_Ring / Blade_Track /
+# Blade_Wall / Tip_Wall.  intensity is 0–1 (scales count and velocity).
 func _spawn_contact_effect(pos: Vector3, dir: Vector3, contact_key: String, intensity: float) -> void:
-	# Select pool, falling back to clash_blade if the specific one is empty.
+	# Select pool, falling back to Blade_Blade if the specific one is empty.
 	var pool: Array
 	match contact_key:
-		"clash_ring":  pool = _fx_clash_ring  if not _fx_clash_ring.is_empty()  else _fx_clash_blade
-		"clash_body":  pool = _fx_clash_body  if not _fx_clash_body.is_empty()  else _fx_clash_blade
-		"wall_blade":  pool = _fx_wall_blade  if not _fx_wall_blade.is_empty()  else _fx_clash_blade
-		"wall_tip":    pool = _fx_wall_tip    if not _fx_wall_tip.is_empty()    else _fx_wall_blade
-		_:             pool = _fx_clash_blade
+		"Blade_Ring":  pool = _fx_blade_ring  if not _fx_blade_ring.is_empty()  else _fx_blade_blade
+		"Blade_Track": pool = _fx_blade_track if not _fx_blade_track.is_empty() else _fx_blade_blade
+		"Blade_Wall":  pool = _fx_blade_wall  if not _fx_blade_wall.is_empty()  else _fx_blade_blade
+		"Tip_Wall":    pool = _fx_tip_wall    if not _fx_tip_wall.is_empty()    else _fx_blade_wall
+		_:             pool = _fx_blade_blade
 	if pool.is_empty():
 		return
 

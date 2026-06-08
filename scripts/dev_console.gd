@@ -14,11 +14,11 @@ const _TOGGLE_KEY := KEY_F12
 
 # Pool names paired with display labels (order matches the grid)
 const _SOUND_POOLS: Array = [
-	["clash_blade", "Clash — Blade"],
-	["clash_ring",  "Clash — Ring"],
-	["clash_body",  "Clash — Body"],
-	["wall_blade",  "Wall — Blade"],
-	["wall_tip",    "Wall — Tip"],
+	["Blade_Blade", "Blade vs Blade"],
+	["Blade_Ring",  "Blade vs Ring"],
+	["Blade_Track", "Blade vs Track"],
+	["Blade_Wall",  "Blade vs Wall"],
+	["Tip_Wall",    "Tip vs Wall"],
 ]
 
 var _panel: PanelContainer
@@ -29,7 +29,10 @@ var _rim_picker:  ColorPickerButton
 var _wall_picker: ColorPickerButton
 var _model_scale_spin:    SpinBox
 var _model_y_offset_spin: SpinBox
-var _pause_btn:           Button
+var _pause_btn:            Button
+var _master_vol_slider:    HSlider
+var _clash_vol_slider:     HSlider
+var _wall_vol_slider:      HSlider
 
 
 func _ready() -> void:
@@ -77,9 +80,17 @@ func _build_ui() -> void:
 	_panel.add_theme_stylebox_override("panel", chrome)
 	add_child(_panel)
 
+	# ScrollContainer lets the panel overflow its fixed height.
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_panel.add_child(scroll)
+
 	var root_vbox := VBoxContainer.new()
+	root_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root_vbox.add_theme_constant_override("separation", 10)
-	_panel.add_child(root_vbox)
+	scroll.add_child(root_vbox)
 
 	# ── Title bar ──────────────────────────────────────────────────────────────
 	var title_row := HBoxContainer.new()
@@ -119,6 +130,23 @@ func _build_ui() -> void:
 		btn.toggled.connect(_on_sound_toggled.bind(key))
 		grid.add_child(btn)
 		_sound_checks[key] = btn
+
+	root_vbox.add_child(_make_separator())
+
+	# ── Volume sliders ─────────────────────────────────────────────────────────
+	root_vbox.add_child(_make_section_label("VOLUME"))
+
+	_master_vol_slider = _make_vol_row(root_vbox, "Master",
+		GameSettings.master_volume * 100.0)
+	_master_vol_slider.value_changed.connect(_on_master_volume_changed)
+
+	_clash_vol_slider = _make_vol_row(root_vbox, "Clash  (dB offset)",
+		GameSettings.clash_volume_db, -20.0, 20.0, 0.5)
+	_clash_vol_slider.value_changed.connect(_on_clash_volume_changed)
+
+	_wall_vol_slider = _make_vol_row(root_vbox, "Wall  (dB offset)",
+		GameSettings.wall_volume_db, -20.0, 20.0, 0.5)
+	_wall_vol_slider.value_changed.connect(_on_wall_volume_changed)
 
 	root_vbox.add_child(_make_separator())
 
@@ -317,6 +345,19 @@ func _on_model_y_offset_changed(value: float) -> void:
 	_apply_live_model_adjustments()
 
 
+func _on_master_volume_changed(value: float) -> void:
+	GameSettings.master_volume = value / 100.0
+	AudioServer.set_bus_volume_db(0, linear_to_db(GameSettings.master_volume))
+
+
+func _on_clash_volume_changed(value: float) -> void:
+	GameSettings.clash_volume_db = value
+
+
+func _on_wall_volume_changed(value: float) -> void:
+	GameSettings.wall_volume_db = value
+
+
 func _on_pause_toggled() -> void:
 	get_tree().paused = not get_tree().paused
 	if get_tree().paused:
@@ -363,6 +404,14 @@ func _refresh_pickers() -> void:
 	if _model_y_offset_spin:
 		_model_y_offset_spin.value = GameSettings.model_y_offset
 
+	# Volume sliders
+	if _master_vol_slider:
+		_master_vol_slider.value = GameSettings.master_volume * 100.0
+	if _clash_vol_slider:
+		_clash_vol_slider.value = GameSettings.clash_volume_db
+	if _wall_vol_slider:
+		_wall_vol_slider.value = GameSettings.wall_volume_db
+
 	# Sync checkboxes in case sound_enabled was changed externally
 	for key in _sound_checks:
 		(_sound_checks[key] as CheckButton).button_pressed = \
@@ -392,6 +441,39 @@ func _make_check(label: String, initial: bool) -> CheckButton:
 	btn.add_theme_font_size_override("font_size", 13)
 	btn.add_theme_color_override("font_color", Color(0.80, 0.80, 0.88))
 	return btn
+
+
+# Adds a labelled HSlider row to parent and returns the slider.
+# min/max default to 0–100 for the master (percentage); pass explicit range for dB offsets.
+func _make_vol_row(parent: Control, label_text: String, initial: float,
+		min_val: float = 0.0, max_val: float = 100.0, step: float = 1.0) -> HSlider:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+
+	var lbl := _make_label(label_text, Color(0.70, 0.70, 0.78), 13)
+	lbl.custom_minimum_size = Vector2(130, 0)
+	row.add_child(lbl)
+
+	var slider := HSlider.new()
+	slider.min_value              = min_val
+	slider.max_value              = max_val
+	slider.step                   = step
+	slider.value                  = initial
+	slider.size_flags_horizontal  = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size    = Vector2(0, 24)
+	row.add_child(slider)
+
+	var val_lbl := _make_label("%d" % int(initial), Color(0.55, 0.85, 0.55), 12)
+	val_lbl.custom_minimum_size = Vector2(36, 0)
+	val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(val_lbl)
+
+	# Keep the value label in sync with the slider.
+	slider.value_changed.connect(func(v: float) -> void:
+		val_lbl.text = "%d" % int(v))
+
+	return slider
 
 
 func _make_separator() -> HSeparator:

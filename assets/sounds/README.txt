@@ -1,20 +1,27 @@
-Drop audio files here and the game will pick them up automatically at startup.
-Files are sorted into pools by their filename prefix — use any of the names below.
+Drop audio files into the matching subfolder — the game scans each folder at startup
+and picks a random file from it whenever that sound is triggered.
+No filename conventions needed; any .wav, .ogg, or .mp3 will be picked up.
 
-TOP-VS-TOP CLASH SOUNDS
-────────────────────────
-clash_blade_*.wav / .ogg    Outer disc / default clash (fallback for all clash sounds)
-clash_ring_*.wav  / .ogg    Energy ring is struck  (ringing, resonant metallic tone)
-clash_body_*.wav  / .ogg    Inner track body is struck  (duller thud / clunk)
+FOLDER LAYOUT
+──────────────
+sounds/
+├── Blade_Blade/   Outer disc vs outer disc    (fallback for all clash sounds)
+├── Blade_Ring/    Outer disc hits energy ring  (ringing, resonant metallic tone)
+├── Blade_Track/   Outer disc hits track body   (duller thud / clunk)
+├── Blade_Wall/    Blade or side hits bowl wall (sharp scrape / impact)
+├── Tip_Wall/      Tip contacts the bowl floor  (soft tick / scrape)
+└── music/         Background music tracks      (not yet wired to gameplay)
 
-If clash_ring or clash_body pools are empty, the game falls back to clash_blade.
+FALLBACK RULES
+───────────────
+If Blade_Ring/ or Blade_Track/ are empty, the game falls back to Blade_Blade/.
+If Tip_Wall/ is empty the game falls back to Blade_Wall/, and vice versa.
+If a folder has no files at all a synthesised placeholder tone is used instead.
 
-BOWL / WALL SOUNDS
-───────────────────
-wall_blade_*.wav  / .ogg    Blade or side hits the bowl wall  (sharp scrape / impact)
-wall_tip_*.wav    / .ogg    Tip contacts the bowl floor        (soft tick / scrape)
-
-If wall_tip is empty the game falls back to wall_blade, and vice versa.
+MULTIPLE FILES PER FOLDER
+───────────────────────────
+Add as many files as you like to each folder — the game picks one at random
+every hit, so variety feels natural without any extra code.
 
 VOLUME & PITCH
 ───────────────
@@ -34,5 +41,3 @@ TIPS
 • Tip scrape sounds can be slightly longer (0.3–1 s) since they fade naturally.
 • Export at 44 100 Hz / 16-bit WAV or OGG Vorbis q6+.
 • Normalise each file to around -3 dBFS before dropping in.
-• You can have multiple files per pool (e.g. clash_blade_1.wav, clash_blade_2.wav)
-  and the game will pick one at random each hit.
